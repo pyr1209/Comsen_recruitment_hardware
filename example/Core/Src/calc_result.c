@@ -31,14 +31,6 @@ void calc_result_format(calc_complex_t value, char line[VIEW_LINE_WIDTH])
   uint8_t end;
   const uint8_t polar = settings_value(SETTING_POLAR);
 
-  if (polar != 0U)
-  {
-    const calc_complex_t origin = settings_origin();
-
-    value.real -= origin.real;
-    value.imag -= origin.imag;
-  }
-
   calc_format_complex(value, polar,
                       (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
                       &number[1]);

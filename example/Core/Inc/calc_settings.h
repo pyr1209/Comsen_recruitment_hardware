@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-#include "calculator_engine.h"
-
 /*
  * 三个全局设置项 + 极坐标原点。
  *
@@ -46,9 +44,5 @@ void settings_discard(setting_id_t id);
 
 /* 直接改写生效值（暂存一起同步）——给 FMT 一键切换这类快捷操作用。 */
 void settings_set_value(setting_id_t id, uint8_t value);
-
-/* 极坐标显示的"原点"（默认 0,0，也就是普通极坐标）。 */
-calc_complex_t settings_origin(void);
-void           settings_set_origin(calc_complex_t origin);
 
 #endif

@@ -20,8 +20,6 @@
 static uint8_t  setting_value[SETTING_COUNT];
 static uint8_t  setting_pending[SETTING_COUNT];
 
-/* 极坐标显示的"原点"：结果先减去它，再写成 r∠θ。默认 (0,0)，和普通极坐标一致。 */
-static calc_complex_t setting_origin;
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -34,9 +32,6 @@ void settings_init(void)
   setting_pending[SETTING_ANGLE] = setting_value[SETTING_ANGLE];
   setting_pending[SETTING_COMPLEX] = setting_value[SETTING_COMPLEX];
   setting_pending[SETTING_POLAR] = setting_value[SETTING_POLAR];
-
-  setting_origin.real = 0.0f;
-  setting_origin.imag = 0.0f;
 }
 
 uint8_t settings_value(setting_id_t id)
@@ -79,14 +74,4 @@ void settings_set_value(setting_id_t id, uint8_t value)
 {
   setting_value[id] = (uint8_t)((value != 0U) ? 1U : 0U);
   setting_pending[id] = setting_value[id];     /* 快捷操作：暂存一起同步 */
-}
-
-calc_complex_t settings_origin(void)
-{
-  return setting_origin;
-}
-
-void settings_set_origin(calc_complex_t origin)
-{
-  setting_origin = origin;
 }

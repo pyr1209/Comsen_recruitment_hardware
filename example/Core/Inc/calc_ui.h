@@ -23,8 +23,7 @@ typedef enum
   SCREEN_POLAR,        /* POLAR：RECT / POLAR */
   SCREEN_SERIAL,       /* 查看电脑发来的内容 */
   SCREEN_HISTORY,      /* 翻看算过的算式和结果 */
-  SCREEN_GAME,         /* 小恐龙跳仙人掌 */
-  SCREEN_ORIGIN        /* 输入极坐标显示的"原点" */
+  SCREEN_GAME          /* 小恐龙跳仙人掌 */
 } ui_screen_t;
 
 /* 上电进入算式界面。 */

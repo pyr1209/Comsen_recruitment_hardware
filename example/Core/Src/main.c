@@ -185,11 +185,6 @@ static uint8_t history_window;       /* 长算式的横向显示窗口 */
 static dino_game_t dino_game;        /* 小游戏状态 */
 static uint32_t next_game_tick;      /* 下一个游戏逻辑步的时刻（ms） */
 static uint8_t game_sky_night;       /* 当前 CGRAM 天空那格是白天还是黑夜（0xFF = 未知） */
-static calc_complex_t pending_origin;
-static calc_input_t origin_backup;   /* 进原点页面时把算式缓冲整体存这里 */
-static uint8_t origin_backup_window;
-static uint8_t origin_from_menu;     /* 1 = 从 POLAR 菜单页进来的 */
-static calc_status_t origin_status;  /* 原点页面上次提交的结果：非 OK 时第 2 行显示错误 */
 static uint8_t serial_length;
 static uint8_t serial_started;
 static uint8_t swallow_next_lf;
@@ -211,11 +206,6 @@ static void handle_option_page(uint8_t index, setting_id_t id);
 static void handle_view_key(uint8_t index);
 static void handle_history_key(uint8_t index);
 static void handle_game_key(uint8_t index);
-static void handle_origin_key(uint8_t index);
-static void origin_begin(uint8_t from_menu);
-static void origin_finish(uint8_t commit);
-static calc_status_t origin_parse(calc_complex_t *value);
-static void format_origin_line(calc_complex_t origin, char line[LCD_COLUMNS]);
 static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS]);
 static void history_load(uint8_t evaluate);
 static void key_poll(void);
@@ -360,18 +350,10 @@ static void handle_expr_key(uint8_t index)
         }
         else if ((shift_applied == 0U) && (index == TTP229_KEY_FMT))
         {
-          /* 无上档的 FMT：在 a+bi 和 r∠θ 之间一键切换。
-             往极坐标切的时候先弹出"原点"输入页（极坐标相对哪个点算），
-             填完 OK 才真正切过去；切回 a+bi 不需要原点，直接切。 */
-          if (settings_value(SETTING_POLAR) == 0U)
-          {
-            origin_begin(0U);
-          }
-          else
-          {
-            settings_set_value(SETTING_POLAR, 0U);   /* 快捷切换：生效值和暂存值一起改 */
-            (void)calc_result_show_answer(result_line);
-          }
+          /* 无上档的 FMT：在 a+bi 和 r∠θ 之间一键切换（只重画结果，不重算）。 */
+          settings_set_value(SETTING_POLAR,
+                             (uint8_t)((settings_value(SETTING_POLAR) == 0U) ? 1U : 0U));
+          (void)calc_result_show_answer(result_line);
         }
         else if ((shift_applied == 0U) && (base != '\0'))
         {
@@ -705,240 +687,6 @@ static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS])
 }
 
 /**
-  * @brief  把原点写成 "O=x,y" 放进 16 格的一行，放不下就截断。
-  */
-static void format_origin_line(calc_complex_t origin, char line[LCD_COLUMNS])
-{
-  char number[CALC_FORMAT_WIDTH + 1U];
-  uint8_t length = 0U;
-  uint8_t index;
-
-  view_fill(line, ' ');
-  line[length++] = 'O';
-  line[length++] = '=';
-  number[CALC_FORMAT_WIDTH] = '\0';
-
-  calc_format_float(origin.real, number);
-  for (index = 0U; (number[index] != '\0') && (number[index] != ' ') &&
-                   (length < LCD_COLUMNS); ++index)
-  {
-    line[length++] = number[index];
-  }
-  if (length < LCD_COLUMNS)
-  {
-    line[length++] = ',';
-  }
-  calc_format_float(origin.imag, number);
-  for (index = 0U; (number[index] != '\0') && (number[index] != ' ') &&
-                   (length < LCD_COLUMNS); ++index)
-  {
-    line[length++] = number[index];
-  }
-}
-
-/**
-  * @brief  把结果状态写进文字缓冲：把 "(x,y)" 里的两个数分别求值。
-  * @note   两半各自交给求值器，所以原点也能写成 "pi/2"、"1+1" 这样的式子；
-  *         但结果必须是实数——原点是平面上的一个点。
-  *         空槽（"(,)"、"(1,)"）按语法错处理，不替使用者默认成 0。
-  */
-static calc_status_t origin_parse(calc_complex_t *value)
-{
-  char text[CALC_INPUT_MAX + 1U];
-  char half[CALC_INPUT_MAX + 1U];
-  uint8_t start = 0U;
-  uint8_t end = 0U;
-  uint8_t index;
-  uint8_t comma = 0xFFU;
-  uint8_t length;
-  calc_complex_t first;
-  calc_complex_t second;
-  calc_status_t status;
-
-  for (index = 0U; index < calc_input.length; ++index)
-  {
-    text[index] = calc_input.text[index];
-  }
-  text[calc_input.length] = '\0';
-  end = calc_input.length;
-
-  while ((start < end) && (text[start] == ' '))
-  {
-    start++;
-  }
-  while ((end > start) && (text[end - 1U] == ' '))
-  {
-    end--;
-  }
-  if ((end > start) && (text[start] == '('))
-  {
-    start++;
-  }
-  if ((end > start) && (text[end - 1U] == ')'))
-  {
-    end--;
-  }
-
-  for (index = start; index < end; ++index)
-  {
-    if (text[index] == ',')
-    {
-      comma = index;
-      break;
-    }
-  }
-  if ((comma == 0xFFU) || (comma == start) || ((uint8_t)(comma + 1U) >= end))
-  {
-    return CALC_SYNTAX;                    /* 缺一半，或者根本没有逗号 */
-  }
-  for (index = (uint8_t)(comma + 1U); index < end; ++index)
-  {
-    if (text[index] == ',')
-    {
-      return CALC_SYNTAX;                  /* 多出来的逗号 */
-    }
-  }
-
-  length = (uint8_t)(comma - start);
-  for (index = 0U; index < length; ++index)
-  {
-    half[index] = text[start + index];
-  }
-  half[length] = '\0';
-  status = calculator_evaluate(half,
-                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               1U, calc_result_answer(), &first);
-  if (status != CALC_OK)
-  {
-    return status;
-  }
-
-  length = (uint8_t)(end - (uint8_t)(comma + 1U));
-  for (index = 0U; index < length; ++index)
-  {
-    half[index] = text[comma + 1U + index];
-  }
-  half[length] = '\0';
-  status = calculator_evaluate(half,
-                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               1U, calc_result_answer(), &second);
-  if (status != CALC_OK)
-  {
-    return status;
-  }
-
-  if ((first.imag > 1.0e-6f) || (first.imag < -1.0e-6f) ||
-      (second.imag > 1.0e-6f) || (second.imag < -1.0e-6f))
-  {
-    return CALC_DOMAIN;                    /* 原点的两个坐标都必须是实数 */
-  }
-
-  value->real = first.real;
-  value->imag = second.real;
-  return CALC_OK;
-}
-
-/**
-  * @brief  进入原点输入页面。
-  * @note   把算式缓冲整体存起来（退出时还原），换成模板 "(x0,y0)"，
-  *         两个槽先填当前原点，所以"不改直接按 OK"就等于沿用原来的原点。
-  *         光标停在第一个数末尾：可以直接 DEL 改，按 → 跳到第二个数。
-  */
-static void origin_begin(uint8_t from_menu)
-{
-  char first[CALC_FORMAT_WIDTH + 1U];
-  char second[CALC_FORMAT_WIDTH + 1U];
-  const calc_complex_t current_origin = settings_origin();
-  uint8_t index = 0U;
-
-  origin_backup = calc_input;
-  origin_backup_window = window_start;
-  origin_from_menu = from_menu;
-  origin_status = CALC_OK;
-  pending_origin = current_origin;
-
-  calc_format_float(current_origin.real, first);
-  calc_format_float(current_origin.imag, second);
-  first[CALC_FORMAT_WIDTH] = '\0';
-  second[CALC_FORMAT_WIDTH] = '\0';
-
-  calc_input_clear(&calc_input);
-  (void)calc_input_insert(&calc_input, '(');
-  while ((first[index] != '\0') && (first[index] != ' '))
-  {
-    (void)calc_input_insert(&calc_input, first[index]);
-    index++;
-  }
-  (void)calc_input_insert(&calc_input, ',');
-  index = 0U;
-  while ((second[index] != '\0') && (second[index] != ' '))
-  {
-    (void)calc_input_insert(&calc_input, second[index]);
-    index++;
-  }
-  (void)calc_input_insert(&calc_input, ')');
-
-  window_start = 0U;
-  ui_switch_to(SCREEN_ORIGIN);
-}
-
-/**
-  * @brief  离开原点页面：commit = 1 提交（切到极坐标并重画结果），否则丢弃。
-  */
-static void origin_finish(uint8_t commit)
-{
-  calc_input = origin_backup;             /* 把算式缓冲还回去 */
-  window_start = origin_backup_window;
-
-  if (commit != 0U)
-  {
-    settings_set_origin(pending_origin);
-    settings_set_value(SETTING_POLAR, 1U);   /* 填完原点就连带切到极坐标 */
-    calc_result_reapply(&calc_input, result_line);                       /* 立刻按新的原点重画结果 */
-    ui_switch_to(SCREEN_EXPR);
-  }
-  else
-  {
-    ui_switch_to((origin_from_menu != 0U) ? SCREEN_POLAR : SCREEN_EXPR);
-  }
-}
-
-/**
-  * @brief  原点页面的按键：OK / EXE 提交，BACK / MODE / AC 丢弃，其余照算式界面处理。
-  */
-static void handle_origin_key(uint8_t index)
-{
-  calc_complex_t parsed;
-
-  switch (index)
-  {
-    case TTP229_KEY_OK:
-    case TTP229_KEY_EXE:
-      origin_status = origin_parse(&parsed);
-      if (origin_status == CALC_OK)
-      {
-        pending_origin = parsed;
-        origin_finish(1U);
-      }
-      break;
-
-    case TTP229_KEY_BACK:
-    case TTP229_KEY_MODE:
-    case TTP229_KEY_AC:
-      origin_finish(0U);
-      break;
-
-    case TTP229_KEY_FMT:
-      break;                               /* 这个页面里 FMT 不做切换，免得递归进来 */
-
-    default:
-      origin_status = CALC_OK;             /* 一动手就把上次的错误提示清掉 */
-      handle_expr_key(index);
-      break;
-  }
-}
-
-/**
   * @brief  按当前界面把按键分派下去。
   */
 static void ui_handle_key(uint8_t index)
@@ -958,19 +706,7 @@ static void ui_handle_key(uint8_t index)
       break;
 
     case SCREEN_POLAR:
-      /* 选中 POLAR 并提交时，先让用户填"原点"，填完再一起生效。 */
-      if ((index == TTP229_KEY_OK) && (settings_pending(SETTING_POLAR) != 0U))
-      {
-        origin_begin(1U);
-      }
-      else
-      {
-        handle_option_page(index, SETTING_POLAR);
-      }
-      break;
-
-    case SCREEN_ORIGIN:
-      handle_origin_key(index);
+      handle_option_page(index, SETTING_POLAR);
       break;
 
     case SCREEN_SERIAL:
@@ -1210,11 +946,6 @@ static void render(void)
 
     case SCREEN_POLAR:
       view_set_text(top_line, "POLAR");
-      /* 原点不是 (0,0) 时在第 1 行提示一下，免得忘了自己改过 */
-      if ((settings_origin().real != 0.0f) || (settings_origin().imag != 0.0f))
-      {
-        format_origin_line(settings_origin(), top_line);
-      }
       view_option_line(bottom_line, "RECT", 1U, "POLAR", 11U,
                        settings_pending(SETTING_POLAR), settings_value(SETTING_POLAR));
       break;
@@ -1235,19 +966,6 @@ static void render(void)
       {
         /* 两行都是游戏画面：上面是云和腾空的恐龙，下面是地面、仙人掌和恐龙 */
         dino_game_render(&dino_game, top_line, bottom_line);
-      }
-      break;
-
-    case SCREEN_ORIGIN:
-      /* 第 1 行是可编辑的 "(x,y)"（带光标），第 2 行是提示或上次的报错 */
-      view_format_input(&calc_input, &window_start, top_line, &top_cursor);
-      if (origin_status != CALC_OK)
-      {
-        view_set_text(bottom_line, calc_result_status_text(origin_status));
-      }
-      else
-      {
-        view_set_text(bottom_line, "ORIGIN (X,Y)");
       }
       break;
 
@@ -1418,8 +1136,6 @@ int main(void)
   calc_history_clear(&history);
   history_index = 0U;
   history_window = 0U;
-  pending_origin = settings_origin();
-  origin_status = CALC_OK;
   dino_game_reset(&dino_game);
   next_game_tick = HAL_GetTick();
   game_sky_night = 0xFFU;

@@ -30,6 +30,7 @@
 #include "calc_page_game.h"
 #include "calc_page_expr.h"
 #include "calc_page_history.h"
+#include "calc_page_menu.h"
 #include "calc_page_serial.h"
 #include "calc_result.h"
 #include "calc_settings.h"
@@ -83,25 +84,8 @@ static uint8_t shift_applied;     /* 本次按下的键是否走上档层 */
 static touch_model_t touch_model; /* 电极串扰的组合识别模型 */
 
 /* 菜单项。 */
-#define MENU_ITEM_ANGLE    0U
-#define MENU_ITEM_COMPLEX  1U
-#define MENU_ITEM_POLAR    2U
-#define MENU_ITEM_HISTORY  3U
-#define MENU_ITEM_GAME     4U
-#define MENU_ITEM_SERIAL   5U
-#define MENU_ITEM_COUNT    6U
-
-static const char *const menu_item_names[MENU_ITEM_COUNT] =
-{
-  "ANGLE UNIT",
-  "COMPLEX",
-  "POLAR",
-  "HISTORY",
-  "GAME",
-  "SEND FROM PC"
-};
-
-static uint8_t menu_index;        /* 菜单里高亮的项 */
+/* 菜单页和三个设置页都在 calc_page_menu 模块里（高亮第几项、方向键怎么改
+   暂存值都在那边），这里只负责把页面返回的动作落到实处。 */
 
 /* 三个设置项（角度单位 / 数域 / 结果形式）都在 calc_settings 模块里，
    这里只通过它的接口读写（见 calc_settings.h）。 */
@@ -131,8 +115,6 @@ static void MX_TIM3_Init(void);
 
 /* USER CODE BEGIN PFP */
 static void ui_handle_key(uint8_t index);
-static void handle_menu_key(uint8_t index);
-static void handle_option_page(uint8_t index, setting_id_t id);
 static void key_poll(void);
 static void render(void);
 static void lcd_flush(void);
@@ -173,113 +155,6 @@ static void handle_expr_key(uint8_t index)
 }
 
 /**
-  * @brief  菜单界面：方向键换项，OK 进入，BACK / MODE 退出。
-  * @note   方向映射照作者的设计：UP/LEFT 往上、DOWN/RIGHT 往下。
-  */
-static void handle_menu_key(uint8_t index)
-{
-  switch (index)
-  {
-    case TTP229_KEY_UP:
-    case TTP229_KEY_LEFT:
-      menu_index = (menu_index == 0U) ? (uint8_t)(MENU_ITEM_COUNT - 1U)
-                                      : (uint8_t)(menu_index - 1U);
-      break;
-
-    case TTP229_KEY_DOWN:
-    case TTP229_KEY_RIGHT:
-      menu_index = (uint8_t)((menu_index + 1U) % MENU_ITEM_COUNT);
-      break;
-
-    case TTP229_KEY_OK:
-      switch (menu_index)
-      {
-        /* 进设置页时把暂存值同步成当前生效值。 */
-        case MENU_ITEM_ANGLE:
-          settings_begin(SETTING_ANGLE);
-          ui_switch_to(SCREEN_ANGLE);
-          break;
-        case MENU_ITEM_COMPLEX:
-          settings_begin(SETTING_COMPLEX);
-          ui_switch_to(SCREEN_COMPLEX);
-          break;
-        case MENU_ITEM_POLAR:
-          settings_begin(SETTING_POLAR);
-          ui_switch_to(SCREEN_POLAR);
-          break;
-        case MENU_ITEM_HISTORY:
-          history_page_reset();    /* 进来先看最新一条，横向窗口归零 */
-          ui_switch_to(SCREEN_HISTORY);
-          break;
-        case MENU_ITEM_GAME:
-          game_page_enter();                  /* 开新的一局并切到游戏界面 */
-          break;
-        case MENU_ITEM_SERIAL:  ui_switch_to(SCREEN_SERIAL);  break;
-        default:                break;
-      }
-      break;
-
-    case TTP229_KEY_BACK:
-    case TTP229_KEY_MODE:
-      ui_switch_to(SCREEN_EXPR);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/**
-  * @brief  设置页：方向键只改暂存值；OK 提交并重新应用，BACK / MODE 丢弃。
-  * @note   "重新应用"是有必要的：设置不改变以后的算法，还会改变已经算出来的
-  *         结果该怎么显示（角度单位、复数显示格式）。所以提交时要重算一次。
-  *         提交完直接回结果界面（而不是回菜单）：改设置的目的是马上看结果
-  *         变成什么样，回菜单等于多按一次。想继续改别的设置再按 MODE 进菜单。
-  */
-/**
-  * @brief  设置页的按键：把键号翻译成对 calc_settings 的操作 + 页面导航。
-  * @note   设置的"值语义"（暂存/提交/丢弃）在 calc_settings 里；这里只管
-  *         两件界面的事：哪个键对应什么动作、以及按完留在哪个页面。
-  *         另外"提交后要不要重算"也由界面决定（重算属于结果页的事）。
-  */
-static void handle_option_page(uint8_t index, setting_id_t id)
-{
-  switch (index)
-  {
-    case TTP229_KEY_UP:
-    case TTP229_KEY_LEFT:
-      settings_select(id, 0U);             /* 只改暂存值 */
-      break;
-
-    case TTP229_KEY_DOWN:
-    case TTP229_KEY_RIGHT:
-      settings_select(id, 1U);
-      break;
-
-    case TTP229_KEY_OK:
-      if (settings_commit(id) != 0U)       /* 只有真的改了才重算一次 */
-      {
-        calc_result_reapply(expr_page_input(), result_line);
-      }
-      ui_switch_to(SCREEN_EXPR);
-      break;
-
-    case TTP229_KEY_BACK:
-      settings_discard(id);                /* 丢弃：暂存恢复成生效值 */
-      ui_switch_to(SCREEN_MENU);
-      break;
-
-    case TTP229_KEY_MODE:
-      settings_discard(id);                /* 直接退出也要丢弃 */
-      ui_switch_to(SCREEN_EXPR);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/**
   * @brief  按当前界面把按键分派下去。
   */
 static void ui_handle_key(uint8_t index)
@@ -287,20 +162,66 @@ static void ui_handle_key(uint8_t index)
   switch (ui_screen())
   {
     case SCREEN_MENU:
-      handle_menu_key(index);
+      switch (menu_page_handle_key(index))
+      {
+        /* 进设置页先把暂存值同步成当前生效值。 */
+        case MENU_ACTION_OPEN_ANGLE:
+          settings_begin(SETTING_ANGLE);
+          ui_switch_to(SCREEN_ANGLE);
+          break;
+        case MENU_ACTION_OPEN_COMPLEX:
+          settings_begin(SETTING_COMPLEX);
+          ui_switch_to(SCREEN_COMPLEX);
+          break;
+        case MENU_ACTION_OPEN_POLAR:
+          settings_begin(SETTING_POLAR);
+          ui_switch_to(SCREEN_POLAR);
+          break;
+        case MENU_ACTION_OPEN_HISTORY:
+          history_page_reset();          /* 进来先看最新一条，横向窗口归零 */
+          ui_switch_to(SCREEN_HISTORY);
+          break;
+        case MENU_ACTION_OPEN_GAME:
+          game_page_enter();             /* 开新的一局并切到游戏界面 */
+          break;
+        case MENU_ACTION_OPEN_SERIAL:
+          ui_switch_to(SCREEN_SERIAL);
+          break;
+        case MENU_ACTION_EXIT_EXPR:
+          ui_switch_to(SCREEN_EXPR);
+          break;
+        default:
+          break;
+      }
       break;
 
     case SCREEN_ANGLE:
-      handle_option_page(index, SETTING_ANGLE);
-      break;
-
     case SCREEN_COMPLEX:
-      handle_option_page(index, SETTING_COMPLEX);
-      break;
-
     case SCREEN_POLAR:
-      handle_option_page(index, SETTING_POLAR);
+    {
+      /* 三个设置页共用一套按键处理；具体是哪一个由当前页面决定。 */
+      const setting_id_t id = (ui_screen() == SCREEN_ANGLE) ? SETTING_ANGLE
+                            : ((ui_screen() == SCREEN_COMPLEX) ? SETTING_COMPLEX
+                                                               : SETTING_POLAR);
+
+      switch (option_page_handle_key(index, id))
+      {
+        case OPTION_ACTION_APPLY_EXIT:
+          /* 设置变了要重算一次：它不仅改以后的算法，也改已算出结果的样子。 */
+          calc_result_reapply(expr_page_input(), result_line);
+          ui_switch_to(SCREEN_EXPR);
+          break;
+        case OPTION_ACTION_EXIT_MENU:
+          ui_switch_to(SCREEN_MENU);
+          break;
+        case OPTION_ACTION_EXIT_EXPR:
+          ui_switch_to(SCREEN_EXPR);
+          break;
+        default:
+          break;
+      }
       break;
+    }
 
     case SCREEN_SERIAL:
       serial_page_handle_key(index);
@@ -402,44 +323,20 @@ static void render(void)
   switch (ui_screen())
   {
     case SCREEN_MENU:
-    {
-      char item[LCD_COLUMNS + 1U];
-      const char *name = menu_item_names[menu_index];
-      uint8_t position;
-
-      view_set_text(top_line, "SELECT MODE");
-
-      /* 当前项前面加 '>'，和作者菜单的标记方式一致。 */
-      view_fill(item, ' ');
-      item[0] = '>';
-      for (position = 0U; (position < (LCD_COLUMNS - 2U)) &&
-                          (name[position] != '\0'); ++position)
-      {
-        item[2U + position] = name[position];
-      }
-      item[LCD_COLUMNS] = '\0';
-      view_set_text(bottom_line, item);
+      menu_page_render(top_line, bottom_line);
       break;
-    }
 
     case SCREEN_ANGLE:
-      view_set_text(top_line, "ANGLE UNIT");
-      /* 名字在 1 / 11 列，前面一格放标记（'>' 正在选、'*' 已生效） */
-      view_option_line(bottom_line, "DEG", 1U, "RAD", 11U,
-                       settings_pending(SETTING_ANGLE), settings_value(SETTING_ANGLE));
-      break;
-
     case SCREEN_COMPLEX:
-      view_set_text(top_line, "COMPLEX");
-      view_option_line(bottom_line, "COMP", 1U, "CMPLX", 11U,
-                       settings_pending(SETTING_COMPLEX), settings_value(SETTING_COMPLEX));
-      break;
-
     case SCREEN_POLAR:
-      view_set_text(top_line, "POLAR");
-      view_option_line(bottom_line, "RECT", 1U, "POLAR", 11U,
-                       settings_pending(SETTING_POLAR), settings_value(SETTING_POLAR));
+    {
+      const setting_id_t id = (ui_screen() == SCREEN_ANGLE) ? SETTING_ANGLE
+                            : ((ui_screen() == SCREEN_COMPLEX) ? SETTING_COMPLEX
+                                                               : SETTING_POLAR);
+
+      option_page_render(id, top_line, bottom_line);
       break;
+    }
 
     case SCREEN_SERIAL:
       serial_page_render(top_line, bottom_line);
@@ -551,7 +448,7 @@ int main(void)
   expr_page_init();
   shift_latched = 0U;
   ui_init();              /* 上电进算式界面 */
-  menu_index = 0U;
+  menu_page_init();
   settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT */
   shadow_valid = 0U;
   view_set_text(result_line, "READY");

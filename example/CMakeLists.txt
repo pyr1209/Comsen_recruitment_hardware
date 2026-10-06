@@ -58,6 +58,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/calc_format.c
     # 自己实现的历史记录环形缓冲（存算式和结果，供 HISTORY 页面翻看）。
     Core/Src/calc_history.c
+    # 自己实现的显示层行工具（行填充/写文本/算式窗口），无状态、可在 PC 上单测。
+    Core/Src/calc_view.c
     # 自己实现的小游戏逻辑（小恐龙跳仙人掌，纯状态机，不碰硬件）。
     Core/Src/dino_game.c
     # 给 1602 定义自定义字符（∠），作者库没暴露 CGRAM 接口。

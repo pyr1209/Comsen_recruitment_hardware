@@ -26,6 +26,7 @@
 #include "calc_format.h"
 #include "calc_history.h"
 #include "calc_input.h"
+#include "calc_view.h"
 #include "calculator_engine.h"
 #include "dino_game.h"
 #include "lcd1602.h"
@@ -230,9 +231,6 @@ static void MX_GPIO_Init(void);
 static void MX_TIM3_Init(void);
 
 /* USER CODE BEGIN PFP */
-static void lcd_fill(char line[LCD_COLUMNS], char character);
-static void line_set_text(char line[LCD_COLUMNS], const char *text);
-static void format_input_line(char line[LCD_COLUMNS], uint8_t *cursor_column);
 static uint8_t input_ends_with_operand(void);
 static void insert_function_template(const char *name);
 static void format_option_line(char line[LCD_COLUMNS],
@@ -267,31 +265,6 @@ static void lcd_flush(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void lcd_fill(char line[LCD_COLUMNS], char character)
-{
-  uint8_t index;
-
-  for (index = 0U; index < LCD_COLUMNS; ++index)
-  {
-    line[index] = character;
-  }
-}
-
-/**
-  * @brief  把 C 字符串填进 16 格的一行，右边补空格。
-  */
-static void line_set_text(char line[LCD_COLUMNS], const char *text)
-{
-  uint8_t index = 0U;
-
-  lcd_fill(line, ' ');
-  while ((index < LCD_COLUMNS) && (text[index] != '\0'))
-  {
-    line[index] = text[index];
-    index++;
-  }
-}
-
 /**
   * @brief  选项前面的标记：选中的写 '>'，没被选但正生效的写 '*'。
   * @note   两个选项互斥，所以"选中且生效"只写 '>' 就够——另一个选项如果
@@ -326,7 +299,7 @@ static void format_option_line(char line[LCD_COLUMNS],
 {
   uint8_t index;
 
-  lcd_fill(line, ' ');
+  view_fill(line, ' ');
 
   line[first_position - 1U] = option_marker(pending, active, 0U);
   line[second_position - 1U] = option_marker(pending, active, 1U);
@@ -342,36 +315,6 @@ static void format_option_line(char line[LCD_COLUMNS],
   {
     line[second_position + index] = second[index];
   }
-}
-
-/**
-  * @brief  把算式渲染成 16 字符的一行，并给出光标列。
-  * @note   算式比屏幕宽时只显示一个"窗口"，窗口跟着光标走，
-  *         保证光标始终落在可见范围内。
-  */
-static void format_input_line(char line[LCD_COLUMNS], uint8_t *cursor_column)
-{
-  uint8_t column;
-
-  /* 光标跑到窗口左边 → 窗口跟着左移；跑到右边外面 → 窗口右移。 */
-  if (calc_input.cursor < window_start)
-  {
-    window_start = calc_input.cursor;
-  }
-  else if (calc_input.cursor >= (uint8_t)(window_start + LCD_COLUMNS))
-  {
-    window_start = (uint8_t)(calc_input.cursor - (LCD_COLUMNS - 1U));
-  }
-
-  for (column = 0U; column < LCD_COLUMNS; ++column)
-  {
-    const uint8_t index = (uint8_t)(window_start + column);
-
-    /* 算式以外的格子留空格，末尾光标就落在空格上。 */
-    line[column] = (index < calc_input.length) ? calc_input.text[index] : ' ';
-  }
-
-  *cursor_column = (uint8_t)(calc_input.cursor - window_start);
 }
 
 /**
@@ -395,7 +338,7 @@ static void handle_expr_key(uint8_t index)
       case TTP229_KEY_AC:
         /* 作者的设计：AC 除了清空输入，还要把界面拉回初始状态（READY）。 */
         calc_input_clear(&calc_input);
-        line_set_text(result_line, "READY");
+        view_set_text(result_line, "READY");
         last_answer_valid = 0U;
         break;
 
@@ -831,7 +774,7 @@ static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS])
     score = (uint16_t)(score / 10U);
   } while ((score > 0U) && (digit_count < 4U));
 
-  lcd_fill(line, ' ');
+  view_fill(line, ' ');
 
   for (index = 0U; (prefix[index] != '\0') && (position < LCD_COLUMNS); ++index)
   {
@@ -860,7 +803,7 @@ static void format_origin_line(calc_complex_t origin, char line[LCD_COLUMNS])
   uint8_t length = 0U;
   uint8_t index;
 
-  lcd_fill(line, ' ');
+  view_fill(line, ' ');
   line[length++] = 'O';
   line[length++] = '=';
   number[CALC_FORMAT_WIDTH] = '\0';
@@ -1233,11 +1176,11 @@ static void format_result_line(calc_complex_t value, char line[LCD_COLUMNS])
   if (end < CALC_FORMAT_WIDTH)
   {
     number[0] = '=';
-    line_set_text(line, number);
+    view_set_text(line, number);
   }
   else
   {
-    line_set_text(line, &number[1]);
+    view_set_text(line, &number[1]);
   }
 }
 
@@ -1286,17 +1229,17 @@ static void calc_evaluate_and_show(uint8_t remember)
 
     case CALC_DIV_ZERO:
       last_answer_valid = 0U;
-      line_set_text(result_line, status_text(CALC_DIV_ZERO));
+      view_set_text(result_line, status_text(CALC_DIV_ZERO));
       break;
 
     case CALC_DOMAIN:
       last_answer_valid = 0U;
-      line_set_text(result_line, status_text(CALC_DOMAIN));
+      view_set_text(result_line, status_text(CALC_DOMAIN));
       break;
 
     default:
       last_answer_valid = 0U;
-      line_set_text(result_line, status_text(CALC_SYNTAX));
+      view_set_text(result_line, status_text(CALC_SYNTAX));
       break;
   }
 }
@@ -1414,7 +1357,7 @@ static void serial_handle_byte(uint8_t byte)
     /* 新的一行从清屏开始，避免上一行的残字混进来。 */
     if (serial_started == 0U)
     {
-      lcd_fill(serial_line, ' ');
+      view_fill(serial_line, ' ');
       serial_started = 1U;
     }
 
@@ -1464,10 +1407,10 @@ static void render(void)
       const char *name = menu_item_names[menu_index];
       uint8_t position;
 
-      line_set_text(top_line, "SELECT MODE");
+      view_set_text(top_line, "SELECT MODE");
 
       /* 当前项前面加 '>'，和作者菜单的标记方式一致。 */
-      lcd_fill(item, ' ');
+      view_fill(item, ' ');
       item[0] = '>';
       for (position = 0U; (position < (LCD_COLUMNS - 2U)) &&
                           (name[position] != '\0'); ++position)
@@ -1475,25 +1418,25 @@ static void render(void)
         item[2U + position] = name[position];
       }
       item[LCD_COLUMNS] = '\0';
-      line_set_text(bottom_line, item);
+      view_set_text(bottom_line, item);
       break;
     }
 
     case SCREEN_ANGLE:
-      line_set_text(top_line, "ANGLE UNIT");
+      view_set_text(top_line, "ANGLE UNIT");
       /* 名字在 1 / 11 列，前面一格放标记（'>' 正在选、'*' 已生效） */
       format_option_line(bottom_line, "DEG", 1U, "RAD", 11U,
                          pending_angle, setting_angle);
       break;
 
     case SCREEN_COMPLEX:
-      line_set_text(top_line, "COMPLEX");
+      view_set_text(top_line, "COMPLEX");
       format_option_line(bottom_line, "COMP", 1U, "CMPLX", 11U,
                          pending_complex, setting_complex);
       break;
 
     case SCREEN_POLAR:
-      line_set_text(top_line, "POLAR");
+      view_set_text(top_line, "POLAR");
       /* 原点不是 (0,0) 时在第 1 行提示一下，免得忘了自己改过 */
       if ((setting_origin.real != 0.0f) || (setting_origin.imag != 0.0f))
       {
@@ -1504,7 +1447,7 @@ static void render(void)
       break;
 
     case SCREEN_SERIAL:
-      line_set_text(top_line, "SEND FROM PC");
+      view_set_text(top_line, "SEND FROM PC");
       (void)memcpy(bottom_line, serial_line, LCD_COLUMNS);
       break;
 
@@ -1512,7 +1455,7 @@ static void render(void)
       if (dino_game_is_over(&dino_game) != 0U)
       {
         /* 撞了之后：第 1 行 GAME OVER，第 2 行给分数和重开提示 */
-        line_set_text(top_line, "GAME OVER");
+        view_set_text(top_line, "GAME OVER");
         format_game_over_line(dino_game.score, bottom_line);
       }
       else
@@ -1524,14 +1467,14 @@ static void render(void)
 
     case SCREEN_ORIGIN:
       /* 第 1 行是可编辑的 "(x,y)"（带光标），第 2 行是提示或上次的报错 */
-      format_input_line(top_line, &top_cursor);
+      view_format_input(&calc_input, &window_start, top_line, &top_cursor);
       if (origin_status != CALC_OK)
       {
-        line_set_text(bottom_line, status_text(origin_status));
+        view_set_text(bottom_line, status_text(origin_status));
       }
       else
       {
-        line_set_text(bottom_line, "ORIGIN (X,Y)");
+        view_set_text(bottom_line, "ORIGIN (X,Y)");
       }
       break;
 
@@ -1541,8 +1484,8 @@ static void render(void)
 
       if (entry == NULL)
       {
-        line_set_text(top_line, "HISTORY");
-        line_set_text(bottom_line, "EMPTY");
+        view_set_text(top_line, "HISTORY");
+        view_set_text(bottom_line, "EMPTY");
         break;
       }
 
@@ -1593,7 +1536,7 @@ static void render(void)
     }
 
     default:
-      format_input_line(top_line, &top_cursor);
+      view_format_input(&calc_input, &window_start, top_line, &top_cursor);
       (void)memcpy(bottom_line, result_line, LCD_COLUMNS);
 
       /* 上档锁存时在结果行最右端亮一个 'S'：提示下一个字符键会走 SHIFT 层。
@@ -1700,7 +1643,7 @@ int main(void)
   pending_polar = setting_polar;
   shadow_valid = 0U;
   (void)memcpy(serial_line, startup_banner, LCD_COLUMNS);
-  line_set_text(result_line, "READY");
+  view_set_text(result_line, "READY");
   serial_length = 0U;
   serial_started = 0U;
   last_answer.real = 0.0f;

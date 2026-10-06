@@ -27,6 +27,7 @@
 #include "calc_history.h"
 #include "calc_input.h"
 #include "calc_settings.h"
+#include "calc_ui.h"
 #include "calc_view.h"
 #include "calculator_engine.h"
 #include "dino_game.h"
@@ -137,20 +138,6 @@ static uint8_t shift_latched;     /* 上档锁存：结果行右端亮 'S'，下
 static uint8_t shift_applied;     /* 本次按下的键是否走上档层 */
 static touch_model_t touch_model; /* 电极串扰的组合识别模型 */
 
-/* 界面状态机：算式界面 / 模式菜单 / 三个设置页 / 两个查看页。 */
-typedef enum
-{
-  SCREEN_EXPR = 0,     /* 算式界面：第 1 行算式，第 2 行结果 */
-  SCREEN_MENU,         /* SELECT MODE 列表 */
-  SCREEN_ANGLE,        /* ANGLE UNIT：DEG / RAD */
-  SCREEN_COMPLEX,      /* COMPLEX：COMP / CMPLX */
-  SCREEN_POLAR,        /* POLAR：RECT / POLAR */
-  SCREEN_SERIAL,       /* 查看电脑发来的内容 */
-  SCREEN_HISTORY,      /* 翻看算过的算式和结果 */
-  SCREEN_GAME,         /* 小恐龙跳仙人掌 */
-  SCREEN_ORIGIN        /* 输入极坐标显示的"原点" */
-} ui_screen_t;
-
 /* 菜单项。 */
 #define MENU_ITEM_ANGLE    0U
 #define MENU_ITEM_COMPLEX  1U
@@ -170,7 +157,6 @@ static const char *const menu_item_names[MENU_ITEM_COUNT] =
   "SEND FROM PC"
 };
 
-static ui_screen_t screen;        /* 当前界面 */
 static uint8_t menu_index;        /* 菜单里高亮的项 */
 
 /* 三个设置项（角度单位 / 数域 / 结果形式）和极坐标原点都在 calc_settings 模块里，
@@ -290,7 +276,7 @@ static void handle_expr_key(uint8_t index)
         break;
 
       case TTP229_KEY_MODE:    /* 作者的设计：MODE 打开模式菜单 */
-        screen = SCREEN_MENU;
+        ui_switch_to(SCREEN_MENU);
         break;
 
       case TTP229_KEY_OK:
@@ -439,35 +425,35 @@ static void handle_menu_key(uint8_t index)
         /* 进设置页时把暂存值同步成当前生效值。 */
         case MENU_ITEM_ANGLE:
           settings_begin(SETTING_ANGLE);
-          screen = SCREEN_ANGLE;
+          ui_switch_to(SCREEN_ANGLE);
           break;
         case MENU_ITEM_COMPLEX:
           settings_begin(SETTING_COMPLEX);
-          screen = SCREEN_COMPLEX;
+          ui_switch_to(SCREEN_COMPLEX);
           break;
         case MENU_ITEM_POLAR:
           settings_begin(SETTING_POLAR);
-          screen = SCREEN_POLAR;
+          ui_switch_to(SCREEN_POLAR);
           break;
         case MENU_ITEM_HISTORY:
           history_index = 0U;      /* 进来先看最新一条 */
           history_window = 0U;
-          screen = SCREEN_HISTORY;
+          ui_switch_to(SCREEN_HISTORY);
           break;
         case MENU_ITEM_GAME:
           dino_game_reset(&dino_game);        /* 每次进来都是新的一局 */
           next_game_tick = HAL_GetTick();
           game_sky_night = 0xFFU;             /* 让第一个逻辑步把天色点阵刷成白天 */
-          screen = SCREEN_GAME;
+          ui_switch_to(SCREEN_GAME);
           break;
-        case MENU_ITEM_SERIAL:  screen = SCREEN_SERIAL;  break;
+        case MENU_ITEM_SERIAL:  ui_switch_to(SCREEN_SERIAL);  break;
         default:                break;
       }
       break;
 
     case TTP229_KEY_BACK:
     case TTP229_KEY_MODE:
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     default:
@@ -507,17 +493,17 @@ static void handle_option_page(uint8_t index, setting_id_t id)
       {
         calc_reapply();
       }
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     case TTP229_KEY_BACK:
       settings_discard(id);                /* 丢弃：暂存恢复成生效值 */
-      screen = SCREEN_MENU;
+      ui_switch_to(SCREEN_MENU);
       break;
 
     case TTP229_KEY_MODE:
       settings_discard(id);                /* 直接退出也要丢弃 */
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     default:
@@ -533,11 +519,11 @@ static void handle_view_key(uint8_t index)
   switch (index)
   {
     case TTP229_KEY_BACK:
-      screen = SCREEN_MENU;
+      ui_switch_to(SCREEN_MENU);
       break;
 
     case TTP229_KEY_MODE:
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     default:
@@ -556,7 +542,7 @@ static void history_load(uint8_t evaluate)
 
   if (entry == NULL)
   {
-    screen = SCREEN_EXPR;
+    ui_switch_to(SCREEN_EXPR);
     return;
   }
 
@@ -568,7 +554,7 @@ static void history_load(uint8_t evaluate)
   }
 
   window_start = 0U;
-  screen = SCREEN_EXPR;
+  ui_switch_to(SCREEN_EXPR);
 
   if (evaluate != 0U)
   {
@@ -629,11 +615,11 @@ static void handle_history_key(uint8_t index)
       break;
 
     case TTP229_KEY_BACK:
-      screen = SCREEN_MENU;
+      ui_switch_to(SCREEN_MENU);
       break;
 
     case TTP229_KEY_MODE:
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     default:
@@ -659,7 +645,7 @@ static void handle_game_key(uint8_t index)
     else if ((index == TTP229_KEY_MODE) || (index == TTP229_KEY_BACK) ||
              (index == TTP229_KEY_AC))
     {
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
     }
     return;
   }
@@ -674,7 +660,7 @@ static void handle_game_key(uint8_t index)
     case TTP229_KEY_MODE:
     case TTP229_KEY_BACK:
     case TTP229_KEY_AC:
-      screen = SCREEN_EXPR;
+      ui_switch_to(SCREEN_EXPR);
       break;
 
     default:
@@ -902,7 +888,7 @@ static void origin_begin(uint8_t from_menu)
   (void)calc_input_insert(&calc_input, ')');
 
   window_start = 0U;
-  screen = SCREEN_ORIGIN;
+  ui_switch_to(SCREEN_ORIGIN);
 }
 
 /**
@@ -918,11 +904,11 @@ static void origin_finish(uint8_t commit)
     settings_set_origin(pending_origin);
     settings_set_value(SETTING_POLAR, 1U);   /* 填完原点就连带切到极坐标 */
     calc_reapply();                       /* 立刻按新的原点重画结果 */
-    screen = SCREEN_EXPR;
+    ui_switch_to(SCREEN_EXPR);
   }
   else
   {
-    screen = (origin_from_menu != 0U) ? SCREEN_POLAR : SCREEN_EXPR;
+    ui_switch_to((origin_from_menu != 0U) ? SCREEN_POLAR : SCREEN_EXPR);
   }
 }
 
@@ -966,7 +952,7 @@ static void handle_origin_key(uint8_t index)
   */
 static void ui_handle_key(uint8_t index)
 {
-  switch (screen)
+  switch (ui_screen())
   {
     case SCREEN_MENU:
       handle_menu_key(index);
@@ -1336,7 +1322,7 @@ static void render(void)
   top_cursor = NO_CURSOR;
   cursor_row = 0U;
 
-  switch (screen)
+  switch (ui_screen())
   {
     case SCREEN_MENU:
     {
@@ -1570,7 +1556,7 @@ int main(void)
   calc_input_clear(&calc_input);
   shift_latched = 0U;
   window_start = 0U;
-  screen = SCREEN_EXPR;
+  ui_init();              /* 上电进算式界面 */
   menu_index = 0U;
   settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT / 原点 (0,0) */
   shadow_valid = 0U;
@@ -1633,7 +1619,7 @@ int main(void)
     }
 
     /* 5. 小游戏：只在游戏界面里推进逻辑，一个逻辑步 70 ms */
-    if ((screen == SCREEN_GAME) && ((int32_t)(now - next_game_tick) >= 0))
+    if ((ui_screen() == SCREEN_GAME) && ((int32_t)(now - next_game_tick) >= 0))
     {
       const uint8_t night = dino_game_is_night(&dino_game);
 

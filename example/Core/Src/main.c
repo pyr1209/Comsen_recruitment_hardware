@@ -26,6 +26,7 @@
 #include "calc_format.h"
 #include "calc_history.h"
 #include "calc_input.h"
+#include "calc_settings.h"
 #include "calc_view.h"
 #include "calculator_engine.h"
 #include "dino_game.h"
@@ -172,21 +173,8 @@ static const char *const menu_item_names[MENU_ITEM_COUNT] =
 static ui_screen_t screen;        /* 当前界面 */
 static uint8_t menu_index;        /* 菜单里高亮的项 */
 
-/* 三个设置项：阶段五的角度单位、复数模式、结果坐标格式。
-   每个设置都有两份值：
-     setting_xxx  生效值，求值和显示实际使用；
-     pending_xxx  暂存值，只在设置页里被方向键改动。
-   OK 提交（暂存 → 生效并重新应用），BACK 丢弃，这是"设置界面"的通用语义。 */
-static uint8_t setting_angle;     /* 0 = DEG, 1 = RAD */
-/* COMPLEX 页：0 = COMP（只算实数，输入里出现 i / ∠ 或结果带虚部就报 Math ERROR），
-   1 = CMPLX（允许复数）。开机默认 CMPLX，这样 i 直接可用；想要纯实数模式再进菜单切。 */
-static uint8_t setting_complex;
-/* POLAR 页只管"结果怎么写"：0 = RECT（写成 a+bi），1 = POLAR（写成 r∠θ）。
-   实数结果在两种模式下都写成普通实数，不写成 r∠0。等复数引擎做完才会生效。 */
-static uint8_t setting_polar;
-static uint8_t pending_angle;
-static uint8_t pending_complex;
-static uint8_t pending_polar;
+/* 三个设置项（角度单位 / 数域 / 结果形式）和极坐标原点都在 calc_settings 模块里，
+   这里只通过它的接口读写（见 calc_settings.h）。 */
 
 /* 屏幕内容（由 render 生成） */
 static char top_line[LCD_COLUMNS];
@@ -212,8 +200,6 @@ static uint8_t history_window;       /* 长算式的横向显示窗口 */
 static dino_game_t dino_game;        /* 小游戏状态 */
 static uint32_t next_game_tick;      /* 下一个游戏逻辑步的时刻（ms） */
 static uint8_t game_sky_night;       /* 当前 CGRAM 天空那格是白天还是黑夜（0xFF = 未知） */
-/* POLAR 显示的"原点"：结果先减去它，再写成 r∠θ。默认 (0,0)，行为和以前一样。 */
-static calc_complex_t setting_origin;
 static calc_complex_t pending_origin;
 static calc_input_t origin_backup;   /* 进原点页面时把算式缓冲整体存这里 */
 static uint8_t origin_backup_window;
@@ -233,14 +219,10 @@ static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 static uint8_t input_ends_with_operand(void);
 static void insert_function_template(const char *name);
-static void format_option_line(char line[LCD_COLUMNS],
-                               const char *first, uint8_t first_position,
-                               const char *second, uint8_t second_position,
-                               uint8_t pending, uint8_t active);
 static void ui_handle_key(uint8_t index);
 static void handle_expr_key(uint8_t index);
 static void handle_menu_key(uint8_t index);
-static void handle_option_key(uint8_t index, uint8_t *setting, uint8_t *pending);
+static void handle_option_page(uint8_t index, setting_id_t id);
 static void handle_view_key(uint8_t index);
 static void handle_history_key(uint8_t index);
 static void handle_game_key(uint8_t index);
@@ -265,57 +247,6 @@ static void lcd_flush(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/**
-  * @brief  选项前面的标记：选中的写 '>'，没被选但正生效的写 '*'。
-  * @note   两个选项互斥，所以"选中且生效"只写 '>' 就够——另一个选项如果
-  *         没有 '*', 就说明生效的不是它。四种情况因此都能区分：
-  *           选中DEG/生效DEG  ">DEG       RAD"
-  *           选中RAD/生效DEG  " *DEG     >RAD"
-  *           选中DEG/生效RAD  ">DEG      *RAD"
-  *           选中RAD/生效RAD  "  DEG     >RAD"
-  */
-static char option_marker(uint8_t pending, uint8_t active, uint8_t option)
-{
-  if (pending == option)
-  {
-    return '>';
-  }
-  if (active == option)
-  {
-    return '*';
-  }
-
-  return ' ';
-}
-
-/**
-  * @brief  画设置页的两选项行，例如 ">DEG       RAD"。
-  * @note   光标只在算式界面使用（表示输入位置），设置页不开光标。
-  */
-static void format_option_line(char line[LCD_COLUMNS],
-                               const char *first, uint8_t first_position,
-                               const char *second, uint8_t second_position,
-                               uint8_t pending, uint8_t active)
-{
-  uint8_t index;
-
-  view_fill(line, ' ');
-
-  line[first_position - 1U] = option_marker(pending, active, 0U);
-  line[second_position - 1U] = option_marker(pending, active, 1U);
-
-  for (index = 0U; (first[index] != '\0') &&
-                  ((uint8_t)(first_position + index) < LCD_COLUMNS); ++index)
-  {
-    line[first_position + index] = first[index];
-  }
-
-  for (index = 0U; (second[index] != '\0') &&
-                  ((uint8_t)(second_position + index) < LCD_COLUMNS); ++index)
-  {
-    line[second_position + index] = second[index];
-  }
-}
 
 /**
   * @brief  把一个按键翻译成缓冲操作或界面动作。
@@ -452,14 +383,13 @@ static void handle_expr_key(uint8_t index)
           /* 无上档的 FMT：在 a+bi 和 r∠θ 之间一键切换。
              往极坐标切的时候先弹出"原点"输入页（极坐标相对哪个点算），
              填完 OK 才真正切过去；切回 a+bi 不需要原点，直接切。 */
-          if (setting_polar == 0U)
+          if (settings_value(SETTING_POLAR) == 0U)
           {
             origin_begin(0U);
           }
           else
           {
-            setting_polar = 0U;
-            pending_polar = 0U;
+            settings_set_value(SETTING_POLAR, 0U);   /* 快捷切换：生效值和暂存值一起改 */
             if (last_answer_valid != 0U)
             {
               calc_show_result(last_answer);
@@ -508,15 +438,15 @@ static void handle_menu_key(uint8_t index)
       {
         /* 进设置页时把暂存值同步成当前生效值。 */
         case MENU_ITEM_ANGLE:
-          pending_angle = setting_angle;
+          settings_begin(SETTING_ANGLE);
           screen = SCREEN_ANGLE;
           break;
         case MENU_ITEM_COMPLEX:
-          pending_complex = setting_complex;
+          settings_begin(SETTING_COMPLEX);
           screen = SCREEN_COMPLEX;
           break;
         case MENU_ITEM_POLAR:
-          pending_polar = setting_polar;
+          settings_begin(SETTING_POLAR);
           screen = SCREEN_POLAR;
           break;
         case MENU_ITEM_HISTORY:
@@ -552,39 +482,41 @@ static void handle_menu_key(uint8_t index)
   *         提交完直接回结果界面（而不是回菜单）：改设置的目的是马上看结果
   *         变成什么样，回菜单等于多按一次。想继续改别的设置再按 MODE 进菜单。
   */
-static void handle_option_key(uint8_t index, uint8_t *setting, uint8_t *pending)
+/**
+  * @brief  设置页的按键：把键号翻译成对 calc_settings 的操作 + 页面导航。
+  * @note   设置的"值语义"（暂存/提交/丢弃）在 calc_settings 里；这里只管
+  *         两件界面的事：哪个键对应什么动作、以及按完留在哪个页面。
+  *         另外"提交后要不要重算"也由界面决定（重算属于结果页的事）。
+  */
+static void handle_option_page(uint8_t index, setting_id_t id)
 {
   switch (index)
   {
     case TTP229_KEY_UP:
     case TTP229_KEY_LEFT:
-      *pending = 0U;
+      settings_select(id, 0U);             /* 只改暂存值 */
       break;
 
     case TTP229_KEY_DOWN:
     case TTP229_KEY_RIGHT:
-      *pending = 1U;
+      settings_select(id, 1U);
       break;
 
     case TTP229_KEY_OK:
-      /* 提交：只有真的改了才重算一次。 */
-      if (*setting != *pending)
+      if (settings_commit(id) != 0U)       /* 只有真的改了才重算一次 */
       {
-        *setting = *pending;
         calc_reapply();
       }
       screen = SCREEN_EXPR;
       break;
 
     case TTP229_KEY_BACK:
-      /* 丢弃：把暂存恢复成生效值。 */
-      *pending = *setting;
+      settings_discard(id);                /* 丢弃：暂存恢复成生效值 */
       screen = SCREEN_MENU;
       break;
 
     case TTP229_KEY_MODE:
-      /* 直接退出也要丢弃。 */
-      *pending = *setting;
+      settings_discard(id);                /* 直接退出也要丢弃 */
       screen = SCREEN_EXPR;
       break;
 
@@ -684,7 +616,8 @@ static void handle_history_key(uint8_t index)
 
     case TTP229_KEY_FMT:
       /* 翻历史时也能一键换显示形式，render 会按新格式重画第 2 行。 */
-      setting_polar = (setting_polar == 0U) ? 1U : 0U;
+      settings_set_value(SETTING_POLAR,
+                         (uint8_t)((settings_value(SETTING_POLAR) == 0U) ? 1U : 0U));
       break;
 
     case TTP229_KEY_OK:
@@ -896,7 +829,7 @@ static calc_status_t origin_parse(calc_complex_t *value)
   }
   half[length] = '\0';
   status = calculator_evaluate(half,
-                               (setting_angle == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
+                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
                                1U, last_answer, &first);
   if (status != CALC_OK)
   {
@@ -910,7 +843,7 @@ static calc_status_t origin_parse(calc_complex_t *value)
   }
   half[length] = '\0';
   status = calculator_evaluate(half,
-                               (setting_angle == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
+                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
                                1U, last_answer, &second);
   if (status != CALC_OK)
   {
@@ -938,16 +871,17 @@ static void origin_begin(uint8_t from_menu)
 {
   char first[CALC_FORMAT_WIDTH + 1U];
   char second[CALC_FORMAT_WIDTH + 1U];
+  const calc_complex_t current_origin = settings_origin();
   uint8_t index = 0U;
 
   origin_backup = calc_input;
   origin_backup_window = window_start;
   origin_from_menu = from_menu;
   origin_status = CALC_OK;
-  pending_origin = setting_origin;
+  pending_origin = current_origin;
 
-  calc_format_float(setting_origin.real, first);
-  calc_format_float(setting_origin.imag, second);
+  calc_format_float(current_origin.real, first);
+  calc_format_float(current_origin.imag, second);
   first[CALC_FORMAT_WIDTH] = '\0';
   second[CALC_FORMAT_WIDTH] = '\0';
 
@@ -981,9 +915,8 @@ static void origin_finish(uint8_t commit)
 
   if (commit != 0U)
   {
-    setting_origin = pending_origin;
-    setting_polar = 1U;
-    pending_polar = 1U;
+    settings_set_origin(pending_origin);
+    settings_set_value(SETTING_POLAR, 1U);   /* 填完原点就连带切到极坐标 */
     calc_reapply();                       /* 立刻按新的原点重画结果 */
     screen = SCREEN_EXPR;
   }
@@ -1040,22 +973,22 @@ static void ui_handle_key(uint8_t index)
       break;
 
     case SCREEN_ANGLE:
-      handle_option_key(index, &setting_angle, &pending_angle);
+      handle_option_page(index, SETTING_ANGLE);
       break;
 
     case SCREEN_COMPLEX:
-      handle_option_key(index, &setting_complex, &pending_complex);
+      handle_option_page(index, SETTING_COMPLEX);
       break;
 
     case SCREEN_POLAR:
       /* 选中 POLAR 并提交时，先让用户填"原点"，填完再一起生效。 */
-      if ((index == TTP229_KEY_OK) && (pending_polar != 0U))
+      if ((index == TTP229_KEY_OK) && (settings_pending(SETTING_POLAR) != 0U))
       {
         origin_begin(1U);
       }
       else
       {
-        handle_option_key(index, &setting_polar, &pending_polar);
+        handle_option_page(index, SETTING_POLAR);
       }
       break;
 
@@ -1153,14 +1086,18 @@ static void format_result_line(calc_complex_t value, char line[LCD_COLUMNS])
   char number[CALC_FORMAT_WIDTH + 2U];
   uint8_t end;
 
-  if (setting_polar != 0U)
+  const uint8_t polar = settings_value(SETTING_POLAR);
+
+  if (polar != 0U)
   {
-    value.real -= setting_origin.real;
-    value.imag -= setting_origin.imag;
+    const calc_complex_t origin = settings_origin();
+
+    value.real -= origin.real;
+    value.imag -= origin.imag;
   }
 
-  calc_format_complex(value, setting_polar,
-                      (setting_angle == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
+  calc_format_complex(value, polar,
+                      (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
                       &number[1]);
   number[CALC_FORMAT_WIDTH + 1U] = '\0';
 
@@ -1211,8 +1148,8 @@ static void calc_evaluate_and_show(uint8_t remember)
 
   /* 角度单位和复数模式直接取菜单里的设置，阶段五接上函数运算时就能用。 */
   status = calculator_evaluate(expression,
-                               (setting_angle == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               setting_complex,
+                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
+                               settings_value(SETTING_COMPLEX),
                                last_answer, &result);
 
   switch (status)
@@ -1425,25 +1362,25 @@ static void render(void)
     case SCREEN_ANGLE:
       view_set_text(top_line, "ANGLE UNIT");
       /* 名字在 1 / 11 列，前面一格放标记（'>' 正在选、'*' 已生效） */
-      format_option_line(bottom_line, "DEG", 1U, "RAD", 11U,
-                         pending_angle, setting_angle);
+      view_option_line(bottom_line, "DEG", 1U, "RAD", 11U,
+                       settings_pending(SETTING_ANGLE), settings_value(SETTING_ANGLE));
       break;
 
     case SCREEN_COMPLEX:
       view_set_text(top_line, "COMPLEX");
-      format_option_line(bottom_line, "COMP", 1U, "CMPLX", 11U,
-                         pending_complex, setting_complex);
+      view_option_line(bottom_line, "COMP", 1U, "CMPLX", 11U,
+                       settings_pending(SETTING_COMPLEX), settings_value(SETTING_COMPLEX));
       break;
 
     case SCREEN_POLAR:
       view_set_text(top_line, "POLAR");
       /* 原点不是 (0,0) 时在第 1 行提示一下，免得忘了自己改过 */
-      if ((setting_origin.real != 0.0f) || (setting_origin.imag != 0.0f))
+      if ((settings_origin().real != 0.0f) || (settings_origin().imag != 0.0f))
       {
-        format_origin_line(setting_origin, top_line);
+        format_origin_line(settings_origin(), top_line);
       }
-      format_option_line(bottom_line, "RECT", 1U, "POLAR", 11U,
-                         pending_polar, setting_polar);
+      view_option_line(bottom_line, "RECT", 1U, "POLAR", 11U,
+                       settings_pending(SETTING_POLAR), settings_value(SETTING_POLAR));
       break;
 
     case SCREEN_SERIAL:
@@ -1635,12 +1572,7 @@ int main(void)
   window_start = 0U;
   screen = SCREEN_EXPR;
   menu_index = 0U;
-  setting_angle = 0U;     /* DEG */
-  setting_complex = 1U;   /* CMPLX：开机就允许复数 */
-  setting_polar = 0U;     /* RECT */
-  pending_angle = setting_angle;
-  pending_complex = setting_complex;
-  pending_polar = setting_polar;
+  settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT / 原点 (0,0) */
   shadow_valid = 0U;
   (void)memcpy(serial_line, startup_banner, LCD_COLUMNS);
   view_set_text(result_line, "READY");
@@ -1652,9 +1584,7 @@ int main(void)
   calc_history_clear(&history);
   history_index = 0U;
   history_window = 0U;
-  setting_origin.real = 0.0f;      /* 极坐标默认以 (0,0) 为原点 */
-  setting_origin.imag = 0.0f;
-  pending_origin = setting_origin;
+  pending_origin = settings_origin();
   origin_status = CALC_OK;
   dino_game_reset(&dino_game);
   next_game_tick = HAL_GetTick();

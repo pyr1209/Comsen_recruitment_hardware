@@ -22,6 +22,16 @@ void view_fill(char line[VIEW_LINE_WIDTH], char character);
 void view_set_text(char line[VIEW_LINE_WIDTH], const char *text);
 
 /*
+ * 画"两个选项"的那一行（设置页用）：每个选项前面一格放标记——
+ * 选中的写 '>'，没被选但正生效的写 '*'，其余留空格。
+ * 两个选项互斥，所以"选中且生效"只写 '>' 就够了。
+ */
+void view_option_line(char line[VIEW_LINE_WIDTH],
+                      const char *first, uint8_t first_position,
+                      const char *second, uint8_t second_position,
+                      uint8_t pending, uint8_t active);
+
+/*
  * 把算式渲染成一行，并给出光标所在列。
  *
  * 算式比屏幕宽时只显示一个"窗口"，窗口跟着光标走，保证光标始终可见：

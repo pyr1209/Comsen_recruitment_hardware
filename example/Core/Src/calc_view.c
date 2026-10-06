@@ -14,6 +14,21 @@
 
 /* Exported functions --------------------------------------------------------*/
 
+/* 选项前面的标记：选中的写 '>'，没被选但正生效的写 '*'。 */
+static char option_marker(uint8_t pending, uint8_t active, uint8_t option)
+{
+  if (pending == option)
+  {
+    return '>';
+  }
+  if (active == option)
+  {
+    return '*';
+  }
+
+  return ' ';
+}
+
 void view_fill(char line[VIEW_LINE_WIDTH], char character)
 {
   uint8_t index;
@@ -33,6 +48,29 @@ void view_set_text(char line[VIEW_LINE_WIDTH], const char *text)
   {
     line[index] = text[index];
     index++;
+  }
+}
+
+void view_option_line(char line[VIEW_LINE_WIDTH],
+                      const char *first, uint8_t first_position,
+                      const char *second, uint8_t second_position,
+                      uint8_t pending, uint8_t active)
+{
+  uint8_t index;
+
+  /* 标记放在名字前面一格，名字本身接着写。 */
+  line[first_position - 1U] = option_marker(pending, active, 0U);
+  for (index = 0U; (first[index] != '\0') &&
+                   ((uint8_t)(first_position + index) < VIEW_LINE_WIDTH); ++index)
+  {
+    line[first_position + index] = first[index];
+  }
+
+  line[second_position - 1U] = option_marker(pending, active, 1U);
+  for (index = 0U; (second[index] != '\0') &&
+                   ((uint8_t)(second_position + index) < VIEW_LINE_WIDTH); ++index)
+  {
+    line[second_position + index] = second[index];
   }
 }
 

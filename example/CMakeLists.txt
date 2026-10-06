@@ -68,6 +68,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/calc_result.c
     # 自己实现的"SEND FROM PC"页面（串口收到的内容显示在这一页）。
     Core/Src/calc_page_serial.c
+    # 串口接收的行缓冲与显示规则（纯逻辑，可 PC 单测）。
+    Core/Src/calc_serial_rx.c
     # 自己实现的小游戏逻辑（小恐龙跳仙人掌，纯状态机，不碰硬件）。
     Core/Src/dino_game.c
     # 给 1602 定义自定义字符（∠），作者库没暴露 CGRAM 接口。

@@ -31,7 +31,7 @@ uint8_t calc_result_show_answer(char line[VIEW_LINE_WIDTH]);
 /* 把一个结果值格式化成一行（历史页显示某一条时用）。 */
 void calc_result_format(calc_complex_t value, char line[VIEW_LINE_WIDTH]);
 
-/* 求值状态码 → 给用户看的提示文字（原点页也用它显示报错）。 */
+/* 求值状态码 → 给用户看的提示文字。 */
 const char *calc_result_status_text(calc_status_t status);
 
 /* "上一次结果"（Ans）：算式的 A 用它，AC 时清掉。 */

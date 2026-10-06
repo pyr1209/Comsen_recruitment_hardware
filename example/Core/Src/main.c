@@ -28,6 +28,7 @@
 #include "calc_input.h"
 #include "calc_keymap.h"
 #include "calc_page_game.h"
+#include "calc_page_history.h"
 #include "calc_page_serial.h"
 #include "calc_result.h"
 #include "calc_settings.h"
@@ -148,7 +149,7 @@ static const char *const menu_item_names[MENU_ITEM_COUNT] =
 
 static uint8_t menu_index;        /* 菜单里高亮的项 */
 
-/* 三个设置项（角度单位 / 数域 / 结果形式）和极坐标原点都在 calc_settings 模块里，
+/* 三个设置项（角度单位 / 数域 / 结果形式）都在 calc_settings 模块里，
    这里只通过它的接口读写（见 calc_settings.h）。 */
 
 /* 屏幕内容（由 render 生成） */
@@ -167,8 +168,6 @@ static uint8_t shadow_valid;
 
 static touch_filter_t key_filter;
 static calc_history_t history;       /* 算式历史（最近 8 条） */
-static uint8_t history_index;        /* 正在看第几条：0 = 最新 */
-static uint8_t history_window;       /* 长算式的横向显示窗口 */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -183,8 +182,6 @@ static void ui_handle_key(uint8_t index);
 static void handle_expr_key(uint8_t index);
 static void handle_menu_key(uint8_t index);
 static void handle_option_page(uint8_t index, setting_id_t id);
-static void handle_history_key(uint8_t index);
-static void history_load(uint8_t evaluate);
 static void key_poll(void);
 static void render(void);
 static void lcd_flush(void);
@@ -384,8 +381,7 @@ static void handle_menu_key(uint8_t index)
           ui_switch_to(SCREEN_POLAR);
           break;
         case MENU_ITEM_HISTORY:
-          history_index = 0U;      /* 进来先看最新一条 */
-          history_window = 0U;
+          history_page_reset();    /* 进来先看最新一条，横向窗口归零 */
           ui_switch_to(SCREEN_HISTORY);
           break;
         case MENU_ITEM_GAME:
@@ -457,102 +453,6 @@ static void handle_option_page(uint8_t index, setting_id_t id)
 }
 
 /**
-  * @brief  把当前选中那条历史装进输入缓冲，回算式界面。
-  * @note   evaluate = 1 时顺便立刻重算一次（相当于"再来一遍"）。
-  */
-static void history_load(uint8_t evaluate)
-{
-  const calc_history_entry_t *entry = calc_history_get(&history, history_index);
-  uint8_t position = 0U;
-
-  if (entry == NULL)
-  {
-    ui_switch_to(SCREEN_EXPR);
-    return;
-  }
-
-  calc_input_clear(&calc_input);
-  while ((position < CALC_INPUT_MAX) && (entry->expression[position] != '\0'))
-  {
-    (void)calc_input_insert(&calc_input, entry->expression[position]);
-    position++;
-  }
-
-  window_start = 0U;
-  ui_switch_to(SCREEN_EXPR);
-
-  if (evaluate != 0U)
-  {
-    calc_result_evaluate(&calc_input, &history, 1U, result_line);
-  }
-}
-
-/**
-  * @brief  历史页面：上下翻条目、左右滚长算式、OK 装回输入行。
-  * @note   方向键在这里和菜单里不一样：上下是"更旧 / 更新"，左右是横向滚动，
-  *         因为一条算式最长 64 格，屏幕一行只有 16 格。
-  */
-static void handle_history_key(uint8_t index)
-{
-  const uint8_t count = calc_history_count(&history);
-
-  switch (index)
-  {
-    case TTP229_KEY_UP:      /* 往更旧的一条翻 */
-      if ((uint8_t)(history_index + 1U) < count)
-      {
-        history_index++;
-        history_window = 0U;
-      }
-      break;
-
-    case TTP229_KEY_DOWN:    /* 往更新的一条翻 */
-      if (history_index > 0U)
-      {
-        history_index--;
-        history_window = 0U;
-      }
-      break;
-
-    case TTP229_KEY_LEFT:
-      if (history_window > 0U)
-      {
-        history_window--;
-      }
-      break;
-
-    case TTP229_KEY_RIGHT:
-      history_window++;      /* 上限在 render 里按算式长度夹住 */
-      break;
-
-    case TTP229_KEY_FMT:
-      /* 翻历史时也能一键换显示形式，render 会按新格式重画第 2 行。 */
-      settings_set_value(SETTING_POLAR,
-                         (uint8_t)((settings_value(SETTING_POLAR) == 0U) ? 1U : 0U));
-      break;
-
-    case TTP229_KEY_OK:
-      history_load(0U);      /* 装进输入行，回去改一改再算 */
-      break;
-
-    case TTP229_KEY_EXE:
-      history_load(1U);      /* 装进去并立刻重算 */
-      break;
-
-    case TTP229_KEY_BACK:
-      ui_switch_to(SCREEN_MENU);
-      break;
-
-    case TTP229_KEY_MODE:
-      ui_switch_to(SCREEN_EXPR);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/**
   * @brief  按当前界面把按键分派下去。
   */
 static void ui_handle_key(uint8_t index)
@@ -580,8 +480,24 @@ static void ui_handle_key(uint8_t index)
       break;
 
     case SCREEN_HISTORY:
-      handle_history_key(index);
+    {
+      /* 页面返回"要不要把某条装回输入行"；装入和重算是应用层的事，在这里做。 */
+      const history_action_t action = history_page_handle_key(index, &history);
+
+      if (action != HISTORY_ACTION_NONE)
+      {
+        if (history_page_load(&history, &calc_input) != 0U)
+        {
+          window_start = 0U;
+
+          if (action == HISTORY_ACTION_LOAD_EVAL)
+          {
+            calc_result_evaluate(&calc_input, &history, 1U, result_line);
+          }
+        }
+      }
       break;
+    }
 
     case SCREEN_GAME:
       game_page_handle_key(index);
@@ -755,61 +671,8 @@ static void render(void)
       break;
 
     case SCREEN_HISTORY:
-    {
-      const calc_history_entry_t *entry = calc_history_get(&history, history_index);
-
-      if (entry == NULL)
-      {
-        view_set_text(top_line, "HISTORY");
-        view_set_text(bottom_line, "EMPTY");
-        break;
-      }
-
-      /* 第 1 行：这条算式的显示窗口（长算式用左右键横向滚）。 */
-      {
-        uint8_t length = 0U;
-        uint8_t column;
-        uint8_t max_window;
-
-        while ((length < CALC_INPUT_MAX) && (entry->expression[length] != '\0'))
-        {
-          length++;
-        }
-        /* 窗口最多滑到"最后 16 格"，再往右就整屏空了。 */
-        max_window = (length > LCD_COLUMNS) ? (uint8_t)(length - LCD_COLUMNS) : 0U;
-        if (history_window > max_window)
-        {
-          history_window = max_window;
-        }
-
-        for (column = 0U; column < LCD_COLUMNS; ++column)
-        {
-          const uint8_t position = (uint8_t)(history_window + column);
-
-          top_line[column] = (position < length) ? entry->expression[position] : ' ';
-        }
-      }
-
-      /* 第 2 行：按当前设置格式化这条结果；右边还有空位就补 "n/m" 位置提示。 */
-      calc_result_format(entry->result, bottom_line);
-      {
-        uint8_t length = 0U;
-
-        while ((length < LCD_COLUMNS) && (bottom_line[length] != ' '))
-        {
-          length++;
-        }
-
-        if ((uint8_t)(length + 4U) <= LCD_COLUMNS)
-        {
-          /* 条目编号和总数都在 8 以内，各占一位。 */
-          bottom_line[LCD_COLUMNS - 3U] = (char)('0' + (history_index + 1U));
-          bottom_line[LCD_COLUMNS - 2U] = '/';
-          bottom_line[LCD_COLUMNS - 1U] = (char)('0' + history.count);
-        }
-      }
+      history_page_render(&history, top_line, bottom_line);
       break;
-    }
 
     default:
       view_format_input(&calc_input, &window_start, top_line, &top_cursor);
@@ -911,14 +774,13 @@ int main(void)
   window_start = 0U;
   ui_init();              /* 上电进算式界面 */
   menu_index = 0U;
-  settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT / 原点 (0,0) */
+  settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT */
   shadow_valid = 0U;
   view_set_text(result_line, "READY");
   serial_page_init();
   calc_result_init();     /* 清空"上一次结果"（Ans） */
   calc_history_clear(&history);
-  history_index = 0U;
-  history_window = 0U;
+  history_page_reset();
   game_page_init();
 
   next_key = HAL_GetTick();

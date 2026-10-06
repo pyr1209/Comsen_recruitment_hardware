@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- * 三个全局设置项 + 极坐标原点。
+ * 三个全局设置项：角度单位 / 数域 / 结果形式。
  *
  * 每个设置项都有两份值：
  *   value    生效值——求值和显示实际使用；
@@ -23,7 +23,7 @@ typedef enum
   SETTING_COUNT
 } setting_id_t;
 
-/* 上电默认值：DEG / CMPLX / RECT / 原点 (0,0)。 */
+/* 上电默认值：DEG / CMPLX / RECT。 */
 void settings_init(void);
 
 /* 生效值 / 暂存值（都是 0 或 1）。 */

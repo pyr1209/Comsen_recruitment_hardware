@@ -42,9 +42,15 @@ TTP229 用 GPIO 软件模拟两线时序，不是标准 I²C：SCL 拉低 → �
 | 计算 | `calculator_engine.c` 表达式解析 + 复数运算 | 自研（取代 `libcalculator_engine.a`） |
 | 输出 | `calc_format.c` 结果格式化 | 自研（不引入 printf 浮点格式化） |
 | | `calc_history.c` 历史记录环形缓冲 | 自研 |
-| 应用 | `main.c` 主循环 + 界面状态机 + 按键映射 | 自研（取代 `libcalculator_app.a`） |
+| 显示 | `calc_view.c` 行填充 / 写文本 / 选项行 / 算式窗口，无状态 | 自研 |
+| 应用 | `main.c` 主循环 + 按键映射（把上面这些接起来） | 自研（取代 `libcalculator_app.a`） |
+| | `calc_settings.c` 三个设置项的生效值 / 暂存值与提交语义 | 自研 |
+| | `calc_ui.c` 界面状态机：当前页面 + 唯一的切页入口 | 自研 |
+| | `calc_result.c` 求值 → 格式化 → 结果行 + 上一次结果 Ans | 自研 |
+| | `calc_keymap.h`（键号常量）/ `calc_page_serial.c` / `calc_serial_rx.c` | 自研 |
+| | `calc_page_history.c` / `calc_page_game.c` / `dino_game.c` | 自研 |
 
-自研代码共 9 个文件、约 3770 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
+自研代码共 18 个文件、约 4600 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
 `libtouch_model.a`、`libcalculator_engine.a`、`libcalculator_app.a`）已从 `lib/` 删除，
 只保留仍要使用的 `liblcd1602.a`。
 
@@ -61,19 +67,10 @@ SCREEN_EXPR ──MODE──▶ SCREEN_MENU ──OK──▶ ANGLE UNIT / COMPL
 - 提交后**直接回结果界面**（改设置的目的是马上看结果变成什么样），想继续改别的设置再按 MODE。
 - 设置页不显示光标，用 `>` 表示"正在选"、`*` 表示"已生效"。
 
-### 极坐标的"原点"
+### 极坐标
 
-POLAR 显示可以指定一个参考原点：结果先减去原点，再写成 `r∠θ`。默认 `(0,0)`，也就是
-老行为。进入方式有两个，都会先弹出原点输入页 `(x,y)`：
-
-- `MODE → POLAR` 选中 POLAR 按 OK；
-- 在算式界面按 `FMT` 切到极坐标时。
-
-原点页面：第 1 行是可编辑的 `(x,y)`（带光标，预填当前原点，所以直接 OK 就是沿用），
-第 2 行是提示 `ORIGIN (X,Y)` 或上次的报错。两个坐标各自交给求值器算，所以能写
-`(pi/2,1+1)`；但必须是实数，空槽（`(,)`、`(1,)`）按语法错处理，不默认成 0。
-提交后回到结果界面并立刻按新原点重画；BACK / MODE / AC 丢弃。POLAR 菜单页在原点
-不是 (0,0) 时会在第 1 行显示 `O=x,y` 提醒。`FMT` 从极坐标切回 `a+bi` 不需要原点，直接切。
+极坐标固定以原点 `(0,0)` 为参考，`FMT` 在算式界面按一下就在 `a+bi` 和 `r∠θ`
+之间切换，没有额外的原点输入页。
 
 ### 数据流
 

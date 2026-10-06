@@ -210,6 +210,7 @@ static uint8_t history_index;        /* 正在看第几条：0 = 最新 */
 static uint8_t history_window;       /* 长算式的横向显示窗口 */
 static dino_game_t dino_game;        /* 小游戏状态 */
 static uint32_t next_game_tick;      /* 下一个游戏逻辑步的时刻（ms） */
+static uint8_t game_sky_night;       /* 当前 CGRAM 天空那格是白天还是黑夜（0xFF = 未知） */
 /* POLAR 显示的"原点"：结果先减去它，再写成 r∠θ。默认 (0,0)，行为和以前一样。 */
 static calc_complex_t setting_origin;
 static calc_complex_t pending_origin;
@@ -251,6 +252,7 @@ static void origin_finish(uint8_t commit);
 static calc_status_t origin_parse(calc_complex_t *value);
 static const char *status_text(calc_status_t status);
 static void format_origin_line(calc_complex_t origin, char line[LCD_COLUMNS]);
+static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS]);
 static void history_load(uint8_t evaluate);
 static void calc_evaluate_and_show(uint8_t remember);
 static void calc_reapply(void);
@@ -582,6 +584,7 @@ static void handle_menu_key(uint8_t index)
         case MENU_ITEM_GAME:
           dino_game_reset(&dino_game);        /* 每次进来都是新的一局 */
           next_game_tick = HAL_GetTick();
+          game_sky_night = 0xFFU;             /* 让第一个逻辑步把天色点阵刷成白天 */
           screen = SCREEN_GAME;
           break;
         case MENU_ITEM_SERIAL:  screen = SCREEN_SERIAL;  break;
@@ -763,20 +766,19 @@ static void handle_history_key(uint8_t index)
 }
 
 /**
-  * @brief  游戏页面的按键：OK / ↑ / → 跳，MODE / BACK / AC 退出；撞了以后 OK 重开。
+  * @brief  游戏页面的按键。
+  * @note   跳跃只认 ↑ / →（OK 留给"重开"，免得玩的时候手忙脚乱按到 OK 就跳）；
+  *         撞了以后只有 OK 能重开（同样是防误触），MODE / BACK / AC 一律退出。
   */
 static void handle_game_key(uint8_t index)
 {
-  const uint8_t jump_key = (uint8_t)((index == TTP229_KEY_OK) ||
-                                     (index == TTP229_KEY_UP) ||
-                                     (index == TTP229_KEY_RIGHT));
-
   if (dino_game_is_over(&dino_game) != 0U)
   {
-    if (jump_key != 0U)
+    if (index == TTP229_KEY_OK)
     {
-      dino_game_reset(&dino_game);         /* 撞了以后按跳跃键重开 */
+      dino_game_reset(&dino_game);         /* 只有 OK 能重开 */
       next_game_tick = HAL_GetTick();
+      game_sky_night = 0xFFU;              /* 重开回到白天，下一个逻辑步刷新天色 */
     }
     else if ((index == TTP229_KEY_MODE) || (index == TTP229_KEY_BACK) ||
              (index == TTP229_KEY_AC))
@@ -788,7 +790,6 @@ static void handle_game_key(uint8_t index)
 
   switch (index)
   {
-    case TTP229_KEY_OK:
     case TTP229_KEY_UP:
     case TTP229_KEY_RIGHT:
       dino_game_jump(&dino_game);
@@ -802,6 +803,51 @@ static void handle_game_key(uint8_t index)
 
     default:
       break;
+  }
+}
+
+/**
+  * @brief  拼一行 "SCORE n RETRY"，放进 16 格（左对齐，右边补空格）。
+  * @note   分数最多四位，1~4 位都放得下（"SCORE 1234 RETRY" 正好 16 格）。
+  */
+static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS])
+{
+  static const char prefix[] = "SCORE ";
+  static const char suffix[] = " RETRY";
+  char digits[4];
+  uint8_t digit_count = 0U;
+  uint8_t position = 0U;
+  uint8_t index;
+
+  if (score > 9999U)
+  {
+    score = 9999U;
+  }
+
+  do
+  {
+    digits[digit_count] = (char)('0' + (char)(score % 10U));
+    digit_count++;
+    score = (uint16_t)(score / 10U);
+  } while ((score > 0U) && (digit_count < 4U));
+
+  lcd_fill(line, ' ');
+
+  for (index = 0U; (prefix[index] != '\0') && (position < LCD_COLUMNS); ++index)
+  {
+    line[position] = prefix[index];
+    position++;
+  }
+  while ((digit_count > 0U) && (position < LCD_COLUMNS))
+  {
+    digit_count--;
+    line[position] = digits[digit_count];
+    position++;
+  }
+  for (index = 0U; (suffix[index] != '\0') && (position < LCD_COLUMNS); ++index)
+  {
+    line[position] = suffix[index];
+    position++;
   }
 }
 
@@ -1465,8 +1511,9 @@ static void render(void)
     case SCREEN_GAME:
       if (dino_game_is_over(&dino_game) != 0U)
       {
+        /* 撞了之后：第 1 行 GAME OVER，第 2 行给分数和重开提示 */
         line_set_text(top_line, "GAME OVER");
-        line_set_text(bottom_line, "OK=RETRY");
+        format_game_over_line(dino_game.score, bottom_line);
       }
       else
       {
@@ -1668,6 +1715,7 @@ int main(void)
   origin_status = CALC_OK;
   dino_game_reset(&dino_game);
   next_game_tick = HAL_GetTick();
+  game_sky_night = 0xFFU;
 
   next_key = HAL_GetTick();
   next_serial = HAL_GetTick();
@@ -1714,8 +1762,18 @@ int main(void)
     /* 5. 小游戏：只在游戏界面里推进逻辑，一个逻辑步 70 ms */
     if ((screen == SCREEN_GAME) && ((int32_t)(now - next_game_tick) >= 0))
     {
+      const uint8_t night = dino_game_is_night(&dino_game);
+
       next_game_tick += DINO_GAME_TICK_MS;
       dino_game_tick(&dino_game);
+
+      /* 白天黑夜每 10 秒交替：天色一变就把 CGRAM 那一格的点阵换掉
+         （云 ↔ 星星），屏幕上飘的东西自动跟着变。 */
+      if (night != game_sky_night)
+      {
+        game_sky_night = night;
+        lcd_cgram_define_sky(night);
+      }
     }
     /* USER CODE END WHILE */
 

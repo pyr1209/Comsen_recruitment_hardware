@@ -20,16 +20,25 @@ void lcd_cgram_define(uint8_t slot, const uint8_t pattern[8]);
 void lcd_cgram_define_angle(void);
 
 /*
- * 小游戏用的精灵，占 CGRAM 槽 2-6（槽 1 是 ∠，两者互不干扰）。
+ * 小游戏用的精灵。CGRAM 一共 8 格，安排如下（槽 1 的 ∠ 是算式用的）：
+ *   0  天空装饰：白天是云、夜里是星星——两者共用这一格，运行时换点阵
+ *      （见 lcd_cgram_define_sky），这样才腾得出格子给高仙人掌
+ *   2  恐龙跑动第 1 帧      3  恐龙跑动第 2 帧      4  恐龙腾空
+ *   5  矮仙人掌             6  高仙人掌             7  月亮
  * 每个精灵都是 5x8 点阵：8 个字节分别对应从上到下的 8 行，
  * 每行的低 5 位是 5 个像素，bit0 是最右边那一列。
  */
-#define LCD1602_CHAR_DINO_RUN1 2U    /* 恐龙跑动第 1 帧 */
-#define LCD1602_CHAR_DINO_RUN2 3U    /* 恐龙跑动第 2 帧（收腿） */
-#define LCD1602_CHAR_DINO_JUMP 4U    /* 恐龙腾空（收腿、脚下留空） */
-#define LCD1602_CHAR_CACTUS    5U    /* 仙人掌 */
-#define LCD1602_CHAR_CLOUD     6U    /* 云（第 1 行的背景） */
+#define LCD1602_CHAR_SKY         0U    /* 云 / 星星（白天黑夜共用，点阵可切） */
+#define LCD1602_CHAR_DINO_RUN1   2U    /* 恐龙跑动第 1 帧 */
+#define LCD1602_CHAR_DINO_RUN2   3U    /* 恐龙跑动第 2 帧（收腿） */
+#define LCD1602_CHAR_DINO_JUMP   4U    /* 恐龙腾空（身体提起、腿收起） */
+#define LCD1602_CHAR_CACTUS      5U    /* 矮仙人掌 */
+#define LCD1602_CHAR_CACTUS_TALL 6U    /* 高仙人掌 */
+#define LCD1602_CHAR_MOON        7U    /* 月亮（天黑以后固定在第 1 行最左边） */
 
 void lcd_cgram_define_game_sprites(void);
+
+/* 切换天空装饰的点阵：night = 0 换成云，night = 1 换成星星。 */
+void lcd_cgram_define_sky(uint8_t night);
 
 #endif

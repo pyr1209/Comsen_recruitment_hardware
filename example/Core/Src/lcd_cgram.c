@@ -154,16 +154,18 @@ void lcd_cgram_define_game_sprites(void)
     0x04U    /* ..#.. */
   };
 
-  /* 腾空：上半身不变，腿收起来、最下面一行留空，看着就是跳起来了 */
+  /* 腾空：腿收起来，整个身体往上提两行（最下面两行留空），
+     配上更长的滞空时间，看起来跳得更高 */
   static const uint8_t dino_jump[8] =
   {
-    0x0CU, 0x07U, 0x05U, 0x0CU, 0x0FU, 0x1FU,
+    0x0CU, 0x07U, 0x05U, 0x0FU, 0x1FU,
     0x0CU,   /* ..##. */
+    0x00U,   /* ..... */
     0x00U    /* ..... */
   };
 
-  /* 仙人掌：中间一根主干，左右各伸一条手臂，底部张开像扎在地上 */
-  static const uint8_t cactus[8] =
+  /* 高仙人掌：中间一根主干，左右各伸一条手臂，底部张开像扎在地上（占满 8 行） */
+  static const uint8_t cactus_tall[8] =
   {
     0x04U,   /* ..#.. */
     0x04U,   /* ..#.. */
@@ -175,6 +177,43 @@ void lcd_cgram_define_game_sprites(void)
     0x0EU    /* .###. */
   };
 
+  /* 矮仙人掌：同样有主干和手臂，但只占下半部分，看着就矮一截 */
+  static const uint8_t cactus_short[8] =
+  {
+    0x00U,   /* ..... */
+    0x00U,   /* ..... */
+    0x00U,   /* ..... */
+    0x04U,   /* ..#.. */
+    0x0EU,   /* .###. */
+    0x04U,   /* ..#.. */
+    0x04U,   /* ..#.. */
+    0x0EU    /* .###. */
+  };
+
+  /* 月亮：左边厚、上下收细的弯月，天黑以后固定停在第 1 行最左边 */
+  static const uint8_t moon[8] =
+  {
+    0x0CU,   /* ..##. */
+    0x06U,   /* .##.. */
+    0x03U,   /* ##... */
+    0x03U,   /* ##... */
+    0x03U,   /* ##... */
+    0x06U,   /* .##.. */
+    0x0CU,   /* ..##. */
+    0x00U
+  };
+
+  lcd_cgram_define(LCD1602_CHAR_DINO_RUN1, dino_run1);
+  lcd_cgram_define(LCD1602_CHAR_DINO_RUN2, dino_run2);
+  lcd_cgram_define(LCD1602_CHAR_DINO_JUMP, dino_jump);
+  lcd_cgram_define(LCD1602_CHAR_CACTUS, cactus_short);
+  lcd_cgram_define(LCD1602_CHAR_CACTUS_TALL, cactus_tall);
+  lcd_cgram_define(LCD1602_CHAR_MOON, moon);
+  lcd_cgram_define_sky(0U);          /* 开机先按白天（云）来 */
+}
+
+void lcd_cgram_define_sky(uint8_t night)
+{
   /* 云：只占上半部分，在第 1 行飘过去当背景 */
   static const uint8_t cloud[8] =
   {
@@ -185,9 +224,18 @@ void lcd_cgram_define_game_sprites(void)
     0x00U, 0x00U, 0x00U, 0x00U
   };
 
-  lcd_cgram_define(LCD1602_CHAR_DINO_RUN1, dino_run1);
-  lcd_cgram_define(LCD1602_CHAR_DINO_RUN2, dino_run2);
-  lcd_cgram_define(LCD1602_CHAR_DINO_JUMP, dino_jump);
-  lcd_cgram_define(LCD1602_CHAR_CACTUS, cactus);
-  lcd_cgram_define(LCD1602_CHAR_CLOUD, cloud);
+  /* 星星：菱形小点，天黑以后代替云在天空里飘 */
+  static const uint8_t star[8] =
+  {
+    0x00U,   /* ..... */
+    0x04U,   /* ..#.. */
+    0x0EU,   /* .###. */
+    0x1FU,   /* ##### */
+    0x0EU,   /* .###. */
+    0x04U,   /* ..#.. */
+    0x00U,
+    0x00U
+  };
+
+  lcd_cgram_define(LCD1602_CHAR_SKY, (night != 0U) ? star : cloud);
 }

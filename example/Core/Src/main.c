@@ -26,6 +26,8 @@
 #include "calc_format.h"
 #include "calc_history.h"
 #include "calc_input.h"
+#include "calc_keymap.h"
+#include "calc_page_serial.h"
 #include "calc_result.h"
 #include "calc_settings.h"
 #include "calc_ui.h"
@@ -59,21 +61,7 @@
 #define LED_BLINK_PERIOD_MS   500U
 
 #define LCD_COLUMNS           16U
-#define TTP229_KEY_COUNT      30U
 
-/* 功能键的键号，其余键号是字符键。 */
-#define TTP229_KEY_SHIFT      0U
-#define TTP229_KEY_BACK       1U
-#define TTP229_KEY_MODE       2U
-#define TTP229_KEY_UP         3U
-#define TTP229_KEY_OK         4U
-#define TTP229_KEY_LEFT       7U
-#define TTP229_KEY_DOWN       8U
-#define TTP229_KEY_RIGHT      9U
-#define TTP229_KEY_DEL        13U
-#define TTP229_KEY_AC         14U
-#define TTP229_KEY_FMT        28U
-#define TTP229_KEY_EXE        29U
 
 #define NO_CURSOR             0xFFU
 /* USER CODE END PD */
@@ -166,7 +154,6 @@ static uint8_t menu_index;        /* 菜单里高亮的项 */
 /* 屏幕内容（由 render 生成） */
 static char top_line[LCD_COLUMNS];
 static char result_line[LCD_COLUMNS];
-static char serial_line[LCD_COLUMNS];
 static char bottom_line[LCD_COLUMNS];
 static uint8_t top_cursor;        /* 光标所在列，NO_CURSOR 表示不显示 */
 static uint8_t cursor_row;        /* 光标所在行：0 = 第 1 行，1 = 第 2 行 */
@@ -185,10 +172,6 @@ static uint8_t history_window;       /* 长算式的横向显示窗口 */
 static dino_game_t dino_game;        /* 小游戏状态 */
 static uint32_t next_game_tick;      /* 下一个游戏逻辑步的时刻（ms） */
 static uint8_t game_sky_night;       /* 当前 CGRAM 天空那格是白天还是黑夜（0xFF = 未知） */
-static uint8_t serial_length;
-static uint8_t serial_started;
-static uint8_t swallow_next_lf;
-static const char startup_banner[] = "SEND FROM PC    ";
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -203,14 +186,11 @@ static void ui_handle_key(uint8_t index);
 static void handle_expr_key(uint8_t index);
 static void handle_menu_key(uint8_t index);
 static void handle_option_page(uint8_t index, setting_id_t id);
-static void handle_view_key(uint8_t index);
 static void handle_history_key(uint8_t index);
 static void handle_game_key(uint8_t index);
 static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS]);
 static void history_load(uint8_t evaluate);
 static void key_poll(void);
-static void serial_handle_byte(uint8_t byte);
-static void serial_poll(void);
 static void render(void);
 static void lcd_flush(void);
 /* USER CODE END PFP */
@@ -485,26 +465,6 @@ static void handle_option_page(uint8_t index, setting_id_t id)
 }
 
 /**
-  * @brief  查看页（串口 / 按键调试）：BACK 回菜单，MODE 直接回算式界面。
-  */
-static void handle_view_key(uint8_t index)
-{
-  switch (index)
-  {
-    case TTP229_KEY_BACK:
-      ui_switch_to(SCREEN_MENU);
-      break;
-
-    case TTP229_KEY_MODE:
-      ui_switch_to(SCREEN_EXPR);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/**
   * @brief  把当前选中那条历史装进输入缓冲，回算式界面。
   * @note   evaluate = 1 时顺便立刻重算一次（相当于"再来一遍"）。
   */
@@ -710,7 +670,7 @@ static void ui_handle_key(uint8_t index)
       break;
 
     case SCREEN_SERIAL:
-      handle_view_key(index);
+      serial_page_handle_key(index);
       break;
 
     case SCREEN_HISTORY:
@@ -830,76 +790,6 @@ static void key_poll(void)
   ui_handle_key(index);
 }
 
-static void serial_handle_byte(uint8_t byte)
-{
-  /* 回车或换行：这一行显示完就保留在屏幕上，下次输入时再清掉。 */
-  if ((byte == (uint8_t)'\r') || (byte == (uint8_t)'\n'))
-  {
-    if ((byte == (uint8_t)'\n') && (swallow_next_lf != 0U))
-    {
-      /* "\r\n" 只当作一次换行。 */
-      swallow_next_lf = 0U;
-      return;
-    }
-    swallow_next_lf = (byte == (uint8_t)'\r') ? 1U : 0U;
-    serial_length = 0U;
-    serial_started = 0U;
-    return;
-  }
-
-  swallow_next_lf = 0U;
-
-  if (byte == (uint8_t)'\b')
-  {
-    if (serial_length > 0U)
-    {
-      serial_length = (uint8_t)(serial_length - 1U);
-      serial_line[serial_length] = ' ';
-    }
-    return;
-  }
-
-  if ((byte >= (uint8_t)0x20U) && (byte <= (uint8_t)0x7EU))
-  {
-    uint8_t index;
-
-    /* 新的一行从清屏开始，避免上一行的残字混进来。 */
-    if (serial_started == 0U)
-    {
-      view_fill(serial_line, ' ');
-      serial_started = 1U;
-    }
-
-    if (serial_length < LCD_COLUMNS)
-    {
-      serial_line[serial_length] = (char)byte;
-      serial_length = (uint8_t)(serial_length + 1U);
-    }
-    else
-    {
-      /* 这一行满了：整行左移一格，始终显示最新收到的字符。 */
-      for (index = 0U; index < (LCD_COLUMNS - 1U); ++index)
-      {
-        serial_line[index] = serial_line[index + 1U];
-      }
-      serial_line[LCD_COLUMNS - 1U] = (char)byte;
-    }
-  }
-}
-
-static void serial_poll(void)
-{
-  uint8_t chunk[32];
-  uint16_t count;
-  uint16_t index;
-
-  count = usb_rx_read(chunk, (uint16_t)sizeof(chunk));
-  for (index = 0U; index < count; ++index)
-  {
-    serial_handle_byte(chunk[index]);
-  }
-}
-
 /**
   * @brief  生成第 1 行的内容和光标位置。
   */
@@ -951,8 +841,7 @@ static void render(void)
       break;
 
     case SCREEN_SERIAL:
-      view_set_text(top_line, "SEND FROM PC");
-      (void)memcpy(bottom_line, serial_line, LCD_COLUMNS);
+      serial_page_render(top_line, bottom_line);
       break;
 
     case SCREEN_GAME:
@@ -1128,10 +1017,8 @@ int main(void)
   menu_index = 0U;
   settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT / 原点 (0,0) */
   shadow_valid = 0U;
-  (void)memcpy(serial_line, startup_banner, LCD_COLUMNS);
   view_set_text(result_line, "READY");
-  serial_length = 0U;
-  serial_started = 0U;
+  serial_page_init();
   calc_result_init();     /* 清空"上一次结果"（Ans） */
   calc_history_clear(&history);
   history_index = 0U;
@@ -1164,7 +1051,7 @@ int main(void)
     if ((int32_t)(now - next_serial) >= 0)
     {
       next_serial += SERIAL_POLL_PERIOD_MS;
-      serial_poll();
+      serial_page_poll();
     }
 
     /* 3. 生成画面并按需刷屏，最快 50 ms 一次 */

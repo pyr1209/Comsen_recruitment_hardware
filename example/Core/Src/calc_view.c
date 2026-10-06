@@ -58,6 +58,9 @@ void view_option_line(char line[VIEW_LINE_WIDTH],
 {
   uint8_t index;
 
+  /* 先整行清空：两个选项之间的格子也要是空格，不能留下上一屏的字符。 */
+  view_fill(line, ' ');
+
   /* 标记放在名字前面一格，名字本身接着写。 */
   line[first_position - 1U] = option_marker(pending, active, 0U);
   for (index = 0U; (first[index] != '\0') &&

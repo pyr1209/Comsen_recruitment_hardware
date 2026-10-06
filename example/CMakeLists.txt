@@ -64,6 +64,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/calc_settings.c
     # 自己实现的界面状态机（当前页面 + 唯一的切页入口）。
     Core/Src/calc_ui.c
+    # 自己实现的结果流程（求值 → 格式化 → 结果行 + 上一次结果 Ans）。
+    Core/Src/calc_result.c
     # 自己实现的小游戏逻辑（小恐龙跳仙人掌，纯状态机，不碰硬件）。
     Core/Src/dino_game.c
     # 给 1602 定义自定义字符（∠），作者库没暴露 CGRAM 接口。

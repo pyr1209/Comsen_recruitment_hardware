@@ -26,6 +26,7 @@
 #include "calc_format.h"
 #include "calc_history.h"
 #include "calc_input.h"
+#include "calc_result.h"
 #include "calc_settings.h"
 #include "calc_ui.h"
 #include "calc_view.h"
@@ -178,8 +179,6 @@ static uint8_t cursor_row_shadow = 0U;
 static uint8_t shadow_valid;
 
 static touch_filter_t key_filter;
-static calc_complex_t last_answer;   /* 上一次的结果，留给阶段五的 Ans */
-static uint8_t last_answer_valid;    /* 第 2 行现在显示的是不是上一次的结果 */
 static calc_history_t history;       /* 算式历史（最近 8 条） */
 static uint8_t history_index;        /* 正在看第几条：0 = 最新 */
 static uint8_t history_window;       /* 长算式的横向显示窗口 */
@@ -216,14 +215,9 @@ static void handle_origin_key(uint8_t index);
 static void origin_begin(uint8_t from_menu);
 static void origin_finish(uint8_t commit);
 static calc_status_t origin_parse(calc_complex_t *value);
-static const char *status_text(calc_status_t status);
 static void format_origin_line(calc_complex_t origin, char line[LCD_COLUMNS]);
 static void format_game_over_line(uint16_t score, char line[LCD_COLUMNS]);
 static void history_load(uint8_t evaluate);
-static void calc_evaluate_and_show(uint8_t remember);
-static void calc_reapply(void);
-static void calc_show_result(calc_complex_t value);
-static void format_result_line(calc_complex_t value, char line[LCD_COLUMNS]);
 static void key_poll(void);
 static void serial_handle_byte(uint8_t byte);
 static void serial_poll(void);
@@ -256,7 +250,7 @@ static void handle_expr_key(uint8_t index)
         /* 作者的设计：AC 除了清空输入，还要把界面拉回初始状态（READY）。 */
         calc_input_clear(&calc_input);
         view_set_text(result_line, "READY");
-        last_answer_valid = 0U;
+        calc_result_clear_answer();
         break;
 
       case TTP229_KEY_LEFT:
@@ -284,7 +278,7 @@ static void handle_expr_key(uint8_t index)
         break;
 
       case TTP229_KEY_EXE:
-        calc_evaluate_and_show(1U);   /* EXE 的结果进历史 */
+        calc_result_evaluate(&calc_input, &history, 1U, result_line);   /* EXE 的结果进历史 */
         break;
 
       default:
@@ -376,10 +370,7 @@ static void handle_expr_key(uint8_t index)
           else
           {
             settings_set_value(SETTING_POLAR, 0U);   /* 快捷切换：生效值和暂存值一起改 */
-            if (last_answer_valid != 0U)
-            {
-              calc_show_result(last_answer);
-            }
+            (void)calc_result_show_answer(result_line);
           }
         }
         else if ((shift_applied == 0U) && (base != '\0'))
@@ -491,7 +482,7 @@ static void handle_option_page(uint8_t index, setting_id_t id)
     case TTP229_KEY_OK:
       if (settings_commit(id) != 0U)       /* 只有真的改了才重算一次 */
       {
-        calc_reapply();
+        calc_result_reapply(&calc_input, result_line);
       }
       ui_switch_to(SCREEN_EXPR);
       break;
@@ -558,7 +549,7 @@ static void history_load(uint8_t evaluate)
 
   if (evaluate != 0U)
   {
-    calc_evaluate_and_show(1U);
+    calc_result_evaluate(&calc_input, &history, 1U, result_line);
   }
 }
 
@@ -816,7 +807,7 @@ static calc_status_t origin_parse(calc_complex_t *value)
   half[length] = '\0';
   status = calculator_evaluate(half,
                                (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               1U, last_answer, &first);
+                               1U, calc_result_answer(), &first);
   if (status != CALC_OK)
   {
     return status;
@@ -830,7 +821,7 @@ static calc_status_t origin_parse(calc_complex_t *value)
   half[length] = '\0';
   status = calculator_evaluate(half,
                                (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               1U, last_answer, &second);
+                               1U, calc_result_answer(), &second);
   if (status != CALC_OK)
   {
     return status;
@@ -903,7 +894,7 @@ static void origin_finish(uint8_t commit)
   {
     settings_set_origin(pending_origin);
     settings_set_value(SETTING_POLAR, 1U);   /* 填完原点就连带切到极坐标 */
-    calc_reapply();                       /* 立刻按新的原点重画结果 */
+    calc_result_reapply(&calc_input, result_line);                       /* 立刻按新的原点重画结果 */
     ui_switch_to(SCREEN_EXPR);
   }
   else
@@ -1046,148 +1037,7 @@ static void insert_function_template(const char *name)
   (void)calc_input_move_left(&calc_input);      /* 光标退进括号里 */
 }
 
-/**
-  * @brief  求值状态对应的提示文字。
-  */
-static const char *status_text(calc_status_t status)
-{
-  switch (status)
-  {
-    case CALC_DIV_ZERO: return "Div0 ERROR";
-    case CALC_DOMAIN:   return "Math ERROR";
-    case CALC_SYNTAX:   return "Syntax ERROR";
-    default:            return "ERROR";
-  }
-}
-
-/**
-  * @brief  把结果按当前设置（角度单位 / 复数 / 极坐标）格式化成一行。
-  * @note   结果文本是右侧补空格的 16 格，这里先在前面加 "="。
-  *         写到调用者给的缓冲里，这样历史页面复用同一套格式又不会
-  *         覆盖算式界面的结果行。
-  *         极坐标显示时先减去"原点"：结果相对 (x0,y0) 来写 r∠θ。
-  */
-static void format_result_line(calc_complex_t value, char line[LCD_COLUMNS])
-{
-  char number[CALC_FORMAT_WIDTH + 2U];
-  uint8_t end;
-
-  const uint8_t polar = settings_value(SETTING_POLAR);
-
-  if (polar != 0U)
-  {
-    const calc_complex_t origin = settings_origin();
-
-    value.real -= origin.real;
-    value.imag -= origin.imag;
-  }
-
-  calc_format_complex(value, polar,
-                      (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                      &number[1]);
-  number[CALC_FORMAT_WIDTH + 1U] = '\0';
-
-  end = CALC_FORMAT_WIDTH;
-  while ((end > 1U) && (number[end] == ' '))
-  {
-    number[end] = '\0';
-    end--;
-  }
-
-  /* 结果正好占满 16 格时，"=" 会把最后一位（可能是复数的 'i'）挤出屏幕，
-     那就不要 "=" 了，让数字自己占满整行。 */
-  if (end < CALC_FORMAT_WIDTH)
-  {
-    number[0] = '=';
-    view_set_text(line, number);
-  }
-  else
-  {
-    view_set_text(line, &number[1]);
-  }
-}
-
 /* 算式界面用：结果写进第 2 行。 */
-static void calc_show_result(calc_complex_t value)
-{
-  format_result_line(value, result_line);
-}
-
-/**
-  * @brief  求值，并把结果或错误写到第 2 行。
-  * @param  remember 1 = 这次成功的结果记进历史（只有按 EXE 才记；
-  *         改设置触发的重算不记，否则同一条算式会重复入账）。
-  */
-static void calc_evaluate_and_show(uint8_t remember)
-{
-  char expression[CALC_INPUT_MAX + 1U];
-  calc_complex_t result;
-  calc_status_t status;
-  uint8_t index;
-
-  /* 输入缓冲不是以 '\0' 结尾的，复制一份交给求值器。 */
-  for (index = 0U; index < calc_input.length; ++index)
-  {
-    expression[index] = calc_input.text[index];
-  }
-  expression[calc_input.length] = '\0';
-
-  /* 角度单位和复数模式直接取菜单里的设置，阶段五接上函数运算时就能用。 */
-  status = calculator_evaluate(expression,
-                               (settings_value(SETTING_ANGLE) == 0U) ? CALC_ANGLE_DEG : CALC_ANGLE_RAD,
-                               settings_value(SETTING_COMPLEX),
-                               last_answer, &result);
-
-  switch (status)
-  {
-    case CALC_OK:
-      last_answer = result;
-      last_answer_valid = 1U;
-      calc_show_result(result);
-      if (remember != 0U)
-      {
-        calc_history_push(&history, expression, result);
-      }
-      break;
-
-    case CALC_DIV_ZERO:
-      last_answer_valid = 0U;
-      view_set_text(result_line, status_text(CALC_DIV_ZERO));
-      break;
-
-    case CALC_DOMAIN:
-      last_answer_valid = 0U;
-      view_set_text(result_line, status_text(CALC_DOMAIN));
-      break;
-
-    default:
-      last_answer_valid = 0U;
-      view_set_text(result_line, status_text(CALC_SYNTAX));
-      break;
-  }
-}
-
-/**
-  * @brief  设置提交后的"重新应用"。
-  * @note   算式非空就按新设置重算一次；算式为空则不动结果行，保留上一次结果
-  *         作为参照。等阶段五做出复数/极坐标显示后，这里还要把上一次结果按
-  *         新的显示格式重画（作者的做法就是提交时重新格式化结果）。
-  */
-static void calc_reapply(void)
-{
-  if (calc_input.length == 0U)
-  {
-    /* 算式空着，但第 2 行还留着上一次的结果：按新设置重新格式化
-       （POLAR / ANGLE 改的就是"结果怎么写"，不重画就看不出变化）。 */
-    if (last_answer_valid != 0U)
-    {
-      calc_show_result(last_answer);
-    }
-    return;
-  }
-
-  calc_evaluate_and_show(0U);   /* 重算不重复记历史 */
-}
 
 /**
   * @brief  按键采样与去抖，每 10 ms 调用一次。
@@ -1393,7 +1243,7 @@ static void render(void)
       view_format_input(&calc_input, &window_start, top_line, &top_cursor);
       if (origin_status != CALC_OK)
       {
-        view_set_text(bottom_line, status_text(origin_status));
+        view_set_text(bottom_line, calc_result_status_text(origin_status));
       }
       else
       {
@@ -1438,7 +1288,7 @@ static void render(void)
       }
 
       /* 第 2 行：按当前设置格式化这条结果；右边还有空位就补 "n/m" 位置提示。 */
-      format_result_line(entry->result, bottom_line);
+      calc_result_format(entry->result, bottom_line);
       {
         uint8_t length = 0U;
 
@@ -1564,9 +1414,7 @@ int main(void)
   view_set_text(result_line, "READY");
   serial_length = 0U;
   serial_started = 0U;
-  last_answer.real = 0.0f;
-  last_answer.imag = 0.0f;
-  last_answer_valid = 0U;
+  calc_result_init();     /* 清空"上一次结果"（Ans） */
   calc_history_clear(&history);
   history_index = 0U;
   history_window = 0U;

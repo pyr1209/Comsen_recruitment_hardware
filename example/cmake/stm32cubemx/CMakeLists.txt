@@ -18,9 +18,6 @@ target_include_directories(stm32cubemx INTERFACE
     ../../USB_DEVICE/Target
     ../../Drivers/STM32F1xx_HAL_Driver/Inc
     ../../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy
-    ../../Middlewares/Third_Party/FreeRTOS/Source/include
-    ../../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
-    ../../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Inc
     ../../Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
     ../../Drivers/CMSIS/Device/ST/STM32F1xx/Include
@@ -29,7 +26,6 @@ target_include_directories(stm32cubemx INTERFACE
 
 target_sources(stm32cubemx INTERFACE
     ../../Core/Src/main.c
-    ../../Core/Src/freertos.c
     ../../Core/Src/stm32f1xx_it.c
     ../../Core/Src/stm32f1xx_hal_msp.c
     ../../Core/Src/stm32f1xx_hal_timebase_tim.c
@@ -54,16 +50,6 @@ target_sources(stm32cubemx INTERFACE
     ../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c
     ../../Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c
     ../../Core/Src/system_stm32f1xx.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/croutine.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/list.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/queue.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/tasks.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/timers.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
-    ../../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3/port.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c
     ../../Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c
@@ -83,5 +69,4 @@ target_link_libraries(stm32cubemx INTERFACE
 if(CMAKE_C_STANDARD LESS 11)
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
 

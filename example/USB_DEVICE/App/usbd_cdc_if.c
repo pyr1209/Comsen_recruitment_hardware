@@ -62,6 +62,8 @@
   */
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
+#define USB_RX_RING_SIZE 256U
+#define USB_RX_RING_MASK (USB_RX_RING_SIZE - 1U)
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
@@ -97,6 +99,10 @@ uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 static volatile uint8_t export_requested;
 static uint8_t export_match_index;
 
+/* USB 接收环形缓冲：CDC_Receive_FS() 在中断上下文写入，主循环读出。 */
+static volatile uint8_t usb_rx_ring[USB_RX_RING_SIZE];
+static volatile uint16_t usb_rx_head;
+static volatile uint16_t usb_rx_tail;
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -266,6 +272,15 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
   for (uint32_t i = 0; i < *Len; ++i)
   {
     uint8_t character = Buf[i];
+    const uint16_t next_head = (uint16_t)((usb_rx_head + 1U) & USB_RX_RING_MASK);
+
+    /* 缓冲区满时丢弃最新字节，不在中断里等待。 */
+    if (next_head != usb_rx_tail)
+    {
+      usb_rx_ring[usb_rx_head] = character;
+      usb_rx_head = next_head;
+    }
+
     if ((character >= (uint8_t)'a') && (character <= (uint8_t)'z'))
     {
       character = (uint8_t)(character - ((uint8_t)'a' - (uint8_t)'A'));
@@ -320,6 +335,20 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+uint16_t usb_rx_read(uint8_t *buffer, uint16_t length)
+{
+  uint16_t count = 0U;
+
+  while ((count < length) && (usb_rx_tail != usb_rx_head))
+  {
+    buffer[count] = usb_rx_ring[usb_rx_tail];
+    usb_rx_tail = (uint16_t)((usb_rx_tail + 1U) & USB_RX_RING_MASK);
+    count = (uint16_t)(count + 1U);
+  }
+
+  return count;
+}
+
 uint8_t CDC_TakeExportRequest_FS(void)
 {
   uint32_t primask = __get_PRIMASK();

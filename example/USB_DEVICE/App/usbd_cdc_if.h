@@ -109,6 +109,8 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
 uint8_t CDC_TakeExportRequest_FS(void);
+/* 从 USB 接收环形缓冲取出最多 length 字节，返回实际取出的字节数。 */
+uint16_t usb_rx_read(uint8_t *buffer, uint16_t length);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 

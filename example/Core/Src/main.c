@@ -23,31 +23,20 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 
-#include "calc_format.h"
-#include "calc_history.h"
-#include "calc_input.h"
-#include "calc_keymap.h"
-#include "calc_page_game.h"
-#include "calc_page_expr.h"
-#include "calc_page_history.h"
-#include "calc_page_menu.h"
-#include "calc_page_serial.h"
-#include "calc_result.h"
-#include "calc_settings.h"
-#include "calc_ui.h"
+#include "calc_app.h"        /* 界面、按键分派、渲染分派都在这一层 */
 #include "calc_view.h"
-#include "calculator_engine.h"
 #include "lcd1602.h"
 #include "lcd_cgram.h"
 #include "touch_filter.h"
 #include "touch_model.h"
 #include "ttp229.h"
 #include "usb_device.h"
-#include "usbd_cdc_if.h"
 /*
- * 裸机主循环，不使用 FreeRTOS：
- *   第 1 行显示算式（带硬件光标）或按键调试视图，第 2 行显示串口内容。
- *   按键每 10 ms 采样一次、串口每 20 ms 取一次、屏幕按需刷新，互不阻塞。
+ * 裸机主循环，不使用 FreeRTOS。本文件只做两件事：
+ *   1. 芯片/外设初始化（CubeMX 生成的时钟、GPIO、TIM3、USB）；
+ *   2. 主循环的节拍：按键 10 ms 采样、串口 20 ms 取一次、屏幕按需刷新（最快 50 ms）、
+ *      心跳灯 500 ms 翻转，互不阻塞。
+ * "哪个键归哪一页、哪一页画什么"全在 calc_app 里，这里一行界面逻辑都没有。
  */
 /* USER CODE END Includes */
 
@@ -77,22 +66,10 @@
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-/* 算式本身（输入缓冲 + 显示窗口 + 键表）在 calc_page_expr 模块里。
-   SHIFT 是输入层的事，留在这里：它只管"这一下要不要走上档层"。 */
-static uint8_t shift_latched;     /* 上档锁存：结果行右端亮 'S'，下一个字符键走 SHIFT 层 */
-static uint8_t shift_applied;     /* 本次按下的键是否走上档层 */
 static touch_model_t touch_model; /* 电极串扰的组合识别模型 */
 
-/* 菜单项。 */
-/* 菜单页和三个设置页都在 calc_page_menu 模块里（高亮第几项、方向键怎么改
-   暂存值都在那边），这里只负责把页面返回的动作落到实处。 */
-
-/* 三个设置项（角度单位 / 数域 / 结果形式）都在 calc_settings 模块里，
-   这里只通过它的接口读写（见 calc_settings.h）。 */
-
-/* 屏幕内容（由 render 生成） */
+/* 屏幕内容（由 app_render 生成） */
 static char top_line[LCD_COLUMNS];
-static char result_line[LCD_COLUMNS];
 static char bottom_line[LCD_COLUMNS];
 static uint8_t top_cursor;        /* 光标所在列，CALC_VIEW_NO_CURSOR 表示不显示 */
 static uint8_t cursor_row;        /* 光标所在行：0 = 第 1 行，1 = 第 2 行 */
@@ -105,7 +82,6 @@ static uint8_t cursor_row_shadow = 0U;
 static uint8_t shadow_valid;
 
 static touch_filter_t key_filter;
-static calc_history_t history;       /* 算式历史（最近 8 条） */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -114,7 +90,6 @@ static void MX_GPIO_Init(void);
 static void MX_TIM3_Init(void);
 
 /* USER CODE BEGIN PFP */
-static void ui_handle_key(uint8_t index);
 static void key_poll(void);
 static void render(void);
 static void lcd_flush(void);
@@ -122,140 +97,6 @@ static void lcd_flush(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/**
-  * @brief  算式界面：把页面返回的"动作"落到实处。
-  * @note   页面自己管输入缓冲、显示窗口和键表（calc_page_expr.c），
-  *         牵动别的模块的事——开菜单、求值、清结果、重画结果——在这里做。
-  */
-static void handle_expr_key(uint8_t index)
-{
-  switch (expr_page_handle_key(index, shift_applied))
-  {
-    case EXPR_ACTION_OPEN_MENU:
-      ui_switch_to(SCREEN_MENU);
-      break;
-
-    case EXPR_ACTION_EVALUATE:
-      calc_result_evaluate(expr_page_input(), &history, 1U, result_line);
-      break;
-
-    case EXPR_ACTION_CLEAR_RESULT:      /* AC：输入已经清了，结果行回 READY */
-      view_set_text(result_line, "READY");
-      calc_result_clear_answer();
-      break;
-
-    case EXPR_ACTION_REFRESH_RESULT:    /* FMT：设置已切，按新形式重画上一次结果 */
-      (void)calc_result_show_answer(result_line);
-      break;
-
-    default:
-      break;
-  }
-}
-
-/**
-  * @brief  按当前界面把按键分派下去。
-  */
-static void ui_handle_key(uint8_t index)
-{
-  switch (ui_screen())
-  {
-    case SCREEN_MENU:
-      switch (menu_page_handle_key(index))
-      {
-        /* 进设置页先把暂存值同步成当前生效值。 */
-        case MENU_ACTION_OPEN_ANGLE:
-          settings_begin(SETTING_ANGLE);
-          ui_switch_to(SCREEN_ANGLE);
-          break;
-        case MENU_ACTION_OPEN_COMPLEX:
-          settings_begin(SETTING_COMPLEX);
-          ui_switch_to(SCREEN_COMPLEX);
-          break;
-        case MENU_ACTION_OPEN_POLAR:
-          settings_begin(SETTING_POLAR);
-          ui_switch_to(SCREEN_POLAR);
-          break;
-        case MENU_ACTION_OPEN_HISTORY:
-          history_page_reset();          /* 进来先看最新一条，横向窗口归零 */
-          ui_switch_to(SCREEN_HISTORY);
-          break;
-        case MENU_ACTION_OPEN_GAME:
-          game_page_enter();             /* 开新的一局并切到游戏界面 */
-          break;
-        case MENU_ACTION_OPEN_SERIAL:
-          ui_switch_to(SCREEN_SERIAL);
-          break;
-        case MENU_ACTION_EXIT_EXPR:
-          ui_switch_to(SCREEN_EXPR);
-          break;
-        default:
-          break;
-      }
-      break;
-
-    case SCREEN_ANGLE:
-    case SCREEN_COMPLEX:
-    case SCREEN_POLAR:
-    {
-      /* 三个设置页共用一套按键处理；具体是哪一个由当前页面决定。 */
-      const setting_id_t id = (ui_screen() == SCREEN_ANGLE) ? SETTING_ANGLE
-                            : ((ui_screen() == SCREEN_COMPLEX) ? SETTING_COMPLEX
-                                                               : SETTING_POLAR);
-
-      switch (option_page_handle_key(index, id))
-      {
-        case OPTION_ACTION_APPLY_EXIT:
-          /* 设置变了要重算一次：它不仅改以后的算法，也改已算出结果的样子。 */
-          calc_result_reapply(expr_page_input(), result_line);
-          ui_switch_to(SCREEN_EXPR);
-          break;
-        case OPTION_ACTION_EXIT_MENU:
-          ui_switch_to(SCREEN_MENU);
-          break;
-        case OPTION_ACTION_EXIT_EXPR:
-          ui_switch_to(SCREEN_EXPR);
-          break;
-        default:
-          break;
-      }
-      break;
-    }
-
-    case SCREEN_SERIAL:
-      serial_page_handle_key(index);
-      break;
-
-    case SCREEN_HISTORY:
-    {
-      /* 页面返回"要不要把某条装回输入行"；装入和重算是应用层的事，在这里做。 */
-      const history_action_t action = history_page_handle_key(index, &history);
-
-      if (action != HISTORY_ACTION_NONE)
-      {
-        if (history_page_load(&history, expr_page_input()) != 0U)
-        {
-          expr_page_window_reset();      /* 装入的算式从头看起 */
-
-          if (action == HISTORY_ACTION_LOAD_EVAL)
-          {
-            calc_result_evaluate(expr_page_input(), &history, 1U, result_line);
-          }
-        }
-      }
-      break;
-    }
-
-    case SCREEN_GAME:
-      game_page_handle_key(index);
-      break;
-
-    default:
-      handle_expr_key(index);
-      break;
-  }
-}
 
 /**
   * @brief  按键采样与去抖，每 10 ms 调用一次。
@@ -293,75 +134,17 @@ static void key_poll(void)
     index++;
   }
 
-  /* SHIFT 目前只给按键调试视图用；真正的输入层语义下一步再做。 */
-  if (index == TTP229_KEY_SHIFT)
-  {
-    shift_latched = (uint8_t)(shift_latched ^ 1U);
-    shift_applied = 0U;
-  }
-  else
-  {
-    /* 别的键消费掉上档：这一下走上档层，之后锁存自动解除。 */
-    shift_applied = shift_latched;
-    if (shift_latched != 0U)
-    {
-      shift_latched = 0U;
-    }
-  }
-
-  ui_handle_key(index);
+  /* 采样只负责"哪个键被按了"；SHIFT 上档与页面分派都在应用层。 */
+  app_handle_key(index);
 }
 
 /**
-  * @brief  生成第 1 行的内容和光标位置。
+  * @brief  让应用层生成两行内容与光标位置。
+  * @note   哪个页面画哪两行、光标放哪一列，都由 calc_app 决定。
   */
 static void render(void)
 {
-  top_cursor = CALC_VIEW_NO_CURSOR;
-  cursor_row = 0U;
-
-  switch (ui_screen())
-  {
-    case SCREEN_MENU:
-      menu_page_render(top_line, bottom_line);
-      break;
-
-    case SCREEN_ANGLE:
-    case SCREEN_COMPLEX:
-    case SCREEN_POLAR:
-    {
-      const setting_id_t id = (ui_screen() == SCREEN_ANGLE) ? SETTING_ANGLE
-                            : ((ui_screen() == SCREEN_COMPLEX) ? SETTING_COMPLEX
-                                                               : SETTING_POLAR);
-
-      option_page_render(id, top_line, bottom_line);
-      break;
-    }
-
-    case SCREEN_SERIAL:
-      serial_page_render(top_line, bottom_line);
-      break;
-
-    case SCREEN_GAME:
-      game_page_render(top_line, bottom_line);
-      break;
-
-    case SCREEN_HISTORY:
-      history_page_render(&history, top_line, bottom_line);
-      break;
-
-    default:
-      expr_page_render(top_line, &top_cursor);
-      (void)memcpy(bottom_line, result_line, LCD_COLUMNS);
-
-      /* 上档锁存时在结果行最右端亮一个 'S'：提示下一个字符键会走 SHIFT 层。
-         结果文本最长也就十来个字符，右端这几格是空的，不会挡住结果。 */
-      if (shift_latched != 0U)
-      {
-        bottom_line[LCD_COLUMNS - 1U] = 'S';
-      }
-      break;
-  }
+  app_render(top_line, bottom_line, &top_cursor, &cursor_row);
 }
 
 /**
@@ -445,18 +228,8 @@ int main(void)
   lcd_cgram_define_game_sprites();  /* 定义小游戏用的精灵（槽 2-6） */
   touch_filter_init(&key_filter);
   touch_model_load_default(&touch_model);
-  expr_page_init();
-  shift_latched = 0U;
-  ui_init();              /* 上电进算式界面 */
-  menu_page_init();
-  settings_init();        /* 角度单位 DEG / 数域 CMPLX / 结果形式 RECT */
-  shadow_valid = 0U;
-  view_set_text(result_line, "READY");
-  serial_page_init();
-  calc_result_init();     /* 清空"上一次结果"（Ans） */
-  calc_history_clear(&history);
-  history_page_reset();
-  game_page_init();
+  app_init();             /* 界面回算式页；各页面、历史、Ans、SHIFT 全部复位 */
+  shadow_valid = 0U;      /* 影子缓冲还是空的，第一帧必定写屏 */
 
   next_key = HAL_GetTick();
   next_serial = HAL_GetTick();
@@ -482,7 +255,7 @@ int main(void)
     if ((int32_t)(now - next_serial) >= 0)
     {
       next_serial += SERIAL_POLL_PERIOD_MS;
-      serial_page_poll();
+      app_poll_serial();
     }
 
     /* 3. 生成画面并按需刷屏，最快 50 ms 一次 */
@@ -501,7 +274,7 @@ int main(void)
     }
 
     /* 5. 小游戏：页面自己判断"在不在游戏界面、到没到 70 ms" */
-    game_page_poll();
+    app_poll_game();
 
     /* USER CODE END WHILE */
 

@@ -43,7 +43,8 @@ TTP229 用 GPIO 软件模拟两线时序，不是标准 I²C：SCL 拉低 → �
 | 输出 | `calc_format.c` 结果格式化 | 自研（不引入 printf 浮点格式化） |
 | | `calc_history.c` 历史记录环形缓冲 | 自研 |
 | 显示 | `calc_view.c` 行填充 / 写文本 / 选项行 / 算式窗口，无状态 | 自研 |
-| 应用 | `main.c` 主循环 + 按键映射（把上面这些接起来） | 自研（取代 `libcalculator_app.a`） |
+| 应用 | `calc_app.c` 装配层：按键分派、渲染分派、共享状态（历史 / 结果行 / SHIFT） | 自研（取代 `libcalculator_app.a`） |
+| | `main.c` 芯片初始化 + 主循环节拍（10 / 20 / 50 / 500 ms 四档） | 自研 |
 | | `calc_settings.c` 三个设置项的生效值 / 暂存值与提交语义 | 自研 |
 | | `calc_ui.c` 界面状态机：当前页面 + 唯一的切页入口 | 自研 |
 | | `calc_result.c` 求值 → 格式化 → 结果行 + 上一次结果 Ans | 自研 |
@@ -52,7 +53,7 @@ TTP229 用 GPIO 软件模拟两线时序，不是标准 I²C：SCL 拉低 → �
 | | `calc_page_history.c` 历史页 / `calc_page_game.c` + `dino_game.c` 小游戏 | 自研 |
 | | `calc_keymap.h` 键号常量（键表与各页面共用） | 自研 |
 
-自研代码共 19 个文件、约 4700 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
+自研代码共 20 个文件、约 4800 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
 `libtouch_model.a`、`libcalculator_engine.a`、`libcalculator_app.a`）已从 `lib/` 删除，
 只保留仍要使用的 `liblcd1602.a`。
 
@@ -74,17 +75,25 @@ SCREEN_EXPR ──MODE──▶ SCREEN_MENU ──OK──▶ ANGLE UNIT / COMPL
 极坐标固定以原点 `(0,0)` 为参考，`FMT` 在算式界面按一下就在 `a+bi` 和 `r∠θ`
 之间切换，没有额外的原点输入页。
 
-### 数据流
+### 数据流与依赖方向
 
 ```
-TTP229 → 去抖 → 组合识别 → 按键号 → 界面状态机 → 输入缓冲 / 设置项
-                                                      ↓ EXE
-                              表达式字符串 → calculator_engine → 复数结果
-                                                      ↓
-                                       calc_format → 第 2 行文本 → LCD
-                                                      ↓
-                                             calc_history（最近 8 条）
+TTP229 → touch_filter 去抖 → touch_model 组合识别 → 按键号 0..29
+                ↓ app_handle_key()（calc_app：SHIFT 上档 + 按界面分派）
+   当前页面 handle_key() → 返回"动作"（开菜单 / 求值 / 装回输入行 / 提交设置…）
+                ↓ calc_app 把动作落到实处
+   输入缓冲 calc_input（算式页持有）  设置项 calc_settings  历史 calc_history
+                ↓ 按 EXE
+   表达式字符串 → calculator_engine → 复数结果 → calc_format → 结果行
+                ↓
+   app_render()：当前页面 render() → 两行 16 字符 + 光标列 → lcd_flush → LCD
 ```
+
+- 依赖方向单向：`main.c → calc_app → 各页面 → calc_ui / calc_settings / …`。
+  页面之间不互相依赖 —— 页面要动别人的东西（装回输入行、提交设置、退出）时返回
+  "动作"，由 `calc_app` 落实；所以任何页面都不需要 `extern` 别人的变量。
+- `calc_ui` 只认"屏幕枚举"这一个概念，是被所有页面依赖的叶子模块；它不 include
+  任何页面，因此页面与状态机之间不会形成环。
 
 ## 3. 按键与输入
 

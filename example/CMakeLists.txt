@@ -72,6 +72,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/calc_serial_rx.c
     # 自己实现的算式页面（输入缓冲 + 显示窗口 + 键表，含 SHIFT 上档层）。
     Core/Src/calc_page_expr.c
+    # 应用层：按键分派、渲染分派、共享状态（历史 / 结果行 / SHIFT）。
+    Core/Src/calc_app.c
     # 自己实现的菜单页与三个设置页（高亮项、方向键改暂存值）。
     Core/Src/calc_page_menu.c
     # 自己实现的小游戏页面（游戏实例、70 ms 节拍、按键映射与画面）。

@@ -8,6 +8,9 @@
 /* 1602 一行多少格。 */
 #define VIEW_LINE_WIDTH 16U
 
+/* cursor_column 取这个值表示"这一屏不显示光标"。 */
+#define CALC_VIEW_NO_CURSOR 0xFFU
+
 /*
  * 显示层的"行工具"：把数据拼成 1602 的一行。
  *

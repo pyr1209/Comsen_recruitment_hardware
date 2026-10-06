@@ -47,10 +47,12 @@ TTP229 用 GPIO 软件模拟两线时序，不是标准 I²C：SCL 拉低 → �
 | | `calc_settings.c` 三个设置项的生效值 / 暂存值与提交语义 | 自研 |
 | | `calc_ui.c` 界面状态机：当前页面 + 唯一的切页入口 | 自研 |
 | | `calc_result.c` 求值 → 格式化 → 结果行 + 上一次结果 Ans | 自研 |
-| | `calc_keymap.h`（键号常量）/ `calc_page_serial.c` / `calc_serial_rx.c` | 自研 |
-| | `calc_page_history.c` / `calc_page_game.c` / `dino_game.c` | 自研 |
+| | `calc_page_expr.c` 算式页：输入缓冲 / 显示窗口 / 键表（含 SHIFT 上档） | 自研 |
+| | `calc_page_serial.c` / `calc_serial_rx.c` 串口页与行缓冲 | 自研 |
+| | `calc_page_history.c` 历史页 / `calc_page_game.c` + `dino_game.c` 小游戏 | 自研 |
+| | `calc_keymap.h` 键号常量（键表与各页面共用） | 自研 |
 
-自研代码共 18 个文件、约 4600 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
+自研代码共 19 个文件、约 4700 行。作者提供的 5 个库（`libttp229.a`、`libtouch_filter.a`、
 `libtouch_model.a`、`libcalculator_engine.a`、`libcalculator_app.a`）已从 `lib/` 删除，
 只保留仍要使用的 `liblcd1602.a`。
 
